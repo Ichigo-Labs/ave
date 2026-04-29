@@ -737,21 +737,46 @@ export function createEditToolDefinition(
 
 EDIT TYPES:
 - replace (default): Replace inclusive [anchor, end_anchor]. end_anchor is required.
-- insert_after: Insert text immediately after the line referenced by anchor.
-- insert_before: Insert text immediately before the line referenced by anchor.
+  * MULTI-LINE: replace a block by passing \\n inside text.
+  * SINGLE LINE: use the same anchor for both anchor and end_anchor.
+  * DELETE cleanly (no trailing blank line): pass text: "".
+- insert_after: Insert text immediately after the line referenced by anchor. end_anchor is unused.
+- insert_before: Insert text immediately before the line referenced by anchor. end_anchor is unused.
 
 ANCHOR RULES:
-- An anchor has the form "Word${delimiter}<exact line content>". The Word is opaque and file-scoped.
-- Always read a file first to obtain its current anchors. Anchors change when lines change.
-- For replace, the range is inclusive: ensure end_anchor points exactly to the last line you want overwritten (e.g., a closing bracket).
+- An anchor has the form "Word${delimiter}<exact line content>". The Word is opaque and file-scoped ("Apple${delimiter}" in one file is different from "Apple${delimiter}" in another).
+- Always read a file first to obtain its current anchors. Anchors are stable across edits but new/modified lines get new anchors, so re-read after every edit if you plan to edit the same file again.
+- For replace, the range is inclusive: ensure end_anchor points exactly to the last line you want overwritten (e.g. a closing bracket). Do not leave orphaned closing syntax behind.
 
-BATCHING:
-- Batch all non-overlapping edits across all files into a single tool call.
-- Edits are matched against the file as it was when the call started; do not assume earlier edits in the same call shifted line numbers.`,
-		promptSnippet: "Edit one or more files via hash-anchored line references (multi-file batched).",
+BATCHING (IMPORTANT):
+- One call, many files: the files[] parameter takes multiple { path, edits[] } entries. ALWAYS batch every non-overlapping edit you plan to make — across all files — into a single edit call. The runtime guarantees safety as long as edits within a file do not overlap.
+- Anchors are stable hashes, so multiple edits to different sections of the same file are INDEPENDENT operations. Do not split them across multiple calls.
+- Edits are matched against the file as it was when the call started; do not assume earlier edits in the same call shifted line numbers.
+- If you do emit multiple edit tool calls in the same response, the runtime will merge them automatically (one read+write per file, one diff summary). Prefer batching explicitly anyway — fewer round trips, clearer intent.
+
+EXAMPLE (multi-file batch):
+  files: [
+    {
+      path: "src/a.py",
+      edits: [
+        { edit_type: "insert_before", anchor: "Apple${delimiter}def calculate_total(items):", text: "from typing import List\\n" },
+        { edit_type: "replace", anchor: "Brave${delimiter}    total = 0", end_anchor: "Eagle${delimiter}            total += item.price",
+          text: "    total = sum(i.price for i in items if i.price > 0)" }
+      ]
+    },
+    {
+      path: "src/b.ts",
+      edits: [
+        { edit_type: "replace", anchor: "Karma${delimiter}  age: number;", end_anchor: "Karma${delimiter}  age: number;", text: "" }
+      ]
+    }
+  ]`,
+		promptSnippet:
+			"Edit one or more files via hash-anchored line references. Batches multiple non-overlapping edits across files into a single call.",
 		promptGuidelines: [
 			"Always read a file first to obtain its hash anchors before editing it.",
-			"Batch non-overlapping edits across files into a single edit call (the files[] parameter accepts multiple entries).",
+			"Batch every non-overlapping edit across all files into a single edit call (the files[] parameter takes multiple entries). Do NOT make one edit call per file when one batched call would do.",
+			"Multiple edits to different sections of the same file are independent because anchors are stable hashes — always batch them together rather than splitting across calls.",
 			"For replace edits, end_anchor is inclusive — make sure it points to the last line of the construct (e.g. closing brace).",
 			"Use insert_after / insert_before when you only need to add lines around a single anchor; do not set end_anchor in that case.",
 		],
