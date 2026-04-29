@@ -12,6 +12,7 @@ import { getDelimiter, splitAnchor, stripHashes } from "./line-hashing.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { consumeEditTurnBatch, getEditTurnBatch } from "./turn-batch-registry.js";
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -389,6 +390,163 @@ async function processFile(
 }
 
 // ---------------------------------------------------------------------------
+// Multi-call batched processing (Layer 2)
+// ---------------------------------------------------------------------------
+
+interface CallContribution {
+	toolCallId: string;
+	files: FileEdit[];
+}
+
+type BatchedCallResult =
+	| { kind: "ok"; result: { content: [{ type: "text"; text: string }]; details: EditToolDetails } }
+	| { kind: "err"; message: string };
+
+/**
+ * Process a set of edit tool calls together. Files contributed by different
+ * calls but targeting the same absolute path are merged into a single
+ * processFile pass (under one withFileMutationQueue acquisition for that
+ * path), so two sibling edit calls touching the same file behave the same as
+ * one batched call with both edits in `files[]`.
+ *
+ * Returns a per-tool-call result map; each entry is either a successful
+ * AgentToolResult-shaped payload or a captured error. The execute() side
+ * decides whether to throw or return based on this kind.
+ */
+async function processBatchedEdits(
+	contributions: CallContribution[],
+	cwd: string,
+	ops: EditOperations,
+	signal: AbortSignal | undefined,
+): Promise<Map<string, BatchedCallResult>> {
+	// 1. Group all files by absolute path. Multiple contributions targeting the
+	//    same file are merged.
+	interface PathGroup {
+		displayPath: string;
+		edits: EditEntry[];
+	}
+	const grouped = new Map<string, PathGroup>();
+	for (const c of contributions) {
+		for (const fe of c.files) {
+			const abs = resolveToCwd(fe.path, cwd);
+			let entry = grouped.get(abs);
+			if (!entry) {
+				entry = { displayPath: fe.path, edits: [] };
+				grouped.set(abs, entry);
+			}
+			if (Array.isArray(fe.edits)) entry.edits.push(...fe.edits);
+		}
+	}
+
+	// 2. Process every grouped path in parallel; each path is serialised under
+	//    its own file mutation queue.
+	const pathResults = new Map<string, ProcessedFile>();
+	await Promise.all(
+		Array.from(grouped.entries()).map(async ([abs, entry]) => {
+			const fe: FileEdit = { path: entry.displayPath, edits: entry.edits };
+			const r = await withFileMutationQueue(abs, async () => {
+				const pr = await processFile(fe, cwd, ops, signal);
+				if (pr.finalContent !== undefined && !pr.error) {
+					if (signal?.aborted) throw new Error("Operation aborted");
+					const final = pr.bom + restoreLineEndings(pr.finalContent, pr.lineEnding);
+					await ops.writeFile(pr.absolutePath, final);
+				}
+				return pr;
+			});
+			pathResults.set(abs, r);
+		}),
+	);
+
+	// Reconcile anchors against final content so subsequent reads / edit calls
+	// in the same task see stable anchors.
+	for (const [abs, r] of pathResults) {
+		if (r.finalContent !== undefined && !r.error) {
+			AnchorStateManager.reconcile(abs, r.finalContent.split("\n"));
+		}
+	}
+
+	// 3. Build a per-tool-call result. A given call only "sees" the files it
+	//    contributed to in its own result text, even if those files were
+	//    co-authored with sibling calls.
+	const out = new Map<string, BatchedCallResult>();
+	for (const c of contributions) {
+		const filesForCall: FileEditResult[] = [];
+		const seen = new Set<string>();
+		for (const fe of c.files) {
+			const abs = resolveToCwd(fe.path, cwd);
+			if (seen.has(abs)) continue;
+			seen.add(abs);
+			const r = pathResults.get(abs);
+			if (!r) continue;
+			filesForCall.push({
+				path: r.path,
+				diff: r.diff,
+				error: r.error,
+				appliedCount: r.appliedCount,
+				failedCount: r.failedCount,
+				firstChangedLine: r.firstChangedLine,
+			});
+		}
+
+		const totalApplied = filesForCall.reduce((acc, f) => acc + f.appliedCount, 0);
+		const totalFailed = filesForCall.reduce((acc, f) => acc + f.failedCount, 0);
+		const successCount = filesForCall.filter((f) => f.appliedCount > 0).length;
+
+		const sections: string[] = [];
+		for (const r of filesForCall) {
+			if (r.diff && !r.error) {
+				sections.push(`*** Update File: ${r.path} (${r.appliedCount} edit(s))\n${r.diff}`);
+			} else if (r.error) {
+				sections.push(`*** Failed: ${r.path}\n${r.error}`);
+			}
+		}
+
+		const header =
+			totalApplied > 0
+				? `Applied ${totalApplied} edit(s) across ${successCount} file(s).${
+						totalFailed > 0 ? ` ${totalFailed} edit(s) failed.` : ""
+					}`
+				: `No edits applied.${totalFailed > 0 ? ` ${totalFailed} edit(s) failed.` : ""}`;
+
+		const combinedDiff = filesForCall
+			.filter((f) => f.diff)
+			.map((f) => `*** Update File: ${f.path}\n${f.diff}`)
+			.join("\n\n");
+		const firstChangedLine = filesForCall.find((f) => f.firstChangedLine !== undefined)?.firstChangedLine;
+
+		if (totalApplied === 0) {
+			out.set(c.toolCallId, { kind: "err", message: sections.join("\n\n") || header });
+			continue;
+		}
+
+		const text = [header, ...sections].join("\n\n");
+		out.set(c.toolCallId, {
+			kind: "ok",
+			result: {
+				content: [{ type: "text", text }],
+				details: { diff: combinedDiff, files: filesForCall, firstChangedLine },
+			},
+		});
+	}
+
+	return out;
+}
+
+function unwrapBatchedResult(
+	toolCallId: string,
+	results: Map<string, BatchedCallResult>,
+): { content: [{ type: "text"; text: string }]; details: EditToolDetails } {
+	const entry = results.get(toolCallId);
+	if (!entry) {
+		throw new Error("Batched edit produced no result for this tool call.");
+	}
+	if (entry.kind === "err") {
+		throw new Error(entry.message);
+	}
+	return entry.result;
+}
+
+// ---------------------------------------------------------------------------
 // Render helpers (TUI)
 // ---------------------------------------------------------------------------
 
@@ -601,7 +759,7 @@ BATCHING:
 		renderShell: "self",
 		prepareArguments: prepareEditArguments,
 
-		async execute(_toolCallId, rawInput: EditToolInput, signal?: AbortSignal) {
+		async execute(toolCallId, rawInput: EditToolInput, signal?: AbortSignal) {
 			if (signal?.aborted) throw new Error("Operation aborted");
 
 			// Defensive coercion: callers that bypass the runtime (e.g. tests, RPC
@@ -613,74 +771,31 @@ BATCHING:
 				throw new Error("Edit tool input is invalid. files must contain at least one entry.");
 			}
 
-			// Process+write per file under each file's mutation queue. Different files
-			// run in parallel; reads and writes targeting the same file are serialised
-			// (the queue keys are resolved through realpath so symlink aliases share a
-			// queue too).
-			const perFileResults: ProcessedFile[] = await Promise.all(
-				input.files.map((fe) => {
-					const absolutePath = resolveToCwd(fe.path, cwd);
-					return withFileMutationQueue(absolutePath, async () => {
-						const r = await processFile(fe, cwd, ops, signal);
-						if (r.finalContent !== undefined && !r.error) {
-							if (signal?.aborted) throw new Error("Operation aborted");
-							const final = r.bom + restoreLineEndings(r.finalContent, r.lineEnding);
-							await ops.writeFile(r.absolutePath, final);
-						}
-						return r;
+			// Layer 2 batching: if the current assistant turn emitted multiple edit
+			// tool calls, the first one to arrive runs them all together (matching
+			// dirac's groupBlocksByPath flow). Subsequent siblings await the same
+			// resultsPromise and pull their per-tool-call result out of the cache.
+			const batch = getEditTurnBatch<BatchedCallResult>(toolCallId);
+			if (batch && batch.editCalls.length > 1) {
+				if (!batch.resultsPromise) {
+					const contributions: CallContribution[] = batch.editCalls.map((tc) => {
+						const args = prepareEditArguments(tc.arguments);
+						return { toolCallId: tc.id, files: Array.isArray(args.files) ? args.files : [] };
 					});
-				}),
-			);
-
-			const summaryFiles: FileEditResult[] = perFileResults.map((r) => ({
-				path: r.path,
-				diff: r.diff,
-				error: r.error,
-				appliedCount: r.appliedCount,
-				failedCount: r.failedCount,
-				firstChangedLine: r.firstChangedLine,
-			}));
-
-			const successCount = summaryFiles.filter((f) => f.appliedCount > 0).length;
-			const totalApplied = summaryFiles.reduce((acc, f) => acc + f.appliedCount, 0);
-			const totalFailed = summaryFiles.reduce((acc, f) => acc + f.failedCount, 0);
-
-			const sections: string[] = [];
-			for (const r of perFileResults) {
-				if (r.finalContent !== undefined && r.diff) {
-					// Reconcile anchors against the final content so subsequent reads / edit
-					// calls in the same task see stable anchors.
-					AnchorStateManager.reconcile(r.absolutePath, r.finalContent.split("\n"));
-					const lineChanges = `(${r.appliedCount} edit(s))`;
-					sections.push(`*** Update File: ${r.path} ${lineChanges}\n${r.diff}${r.error ? `\n\n${r.error}` : ""}`);
-				} else if (r.error) {
-					sections.push(`*** Failed: ${r.path}\n${r.error}`);
+					batch.resultsPromise = processBatchedEdits(contributions, cwd, ops, signal);
+				}
+				try {
+					const results = await batch.resultsPromise;
+					return unwrapBatchedResult(toolCallId, results);
+				} finally {
+					consumeEditTurnBatch(toolCallId);
 				}
 			}
 
-			const header =
-				totalApplied > 0
-					? `Applied ${totalApplied} edit(s) across ${successCount} file(s).${
-							totalFailed > 0 ? ` ${totalFailed} edit(s) failed.` : ""
-						}`
-					: `No edits applied.${totalFailed > 0 ? ` ${totalFailed} edit(s) failed.` : ""}`;
-
-			const text = [header, ...sections].join("\n\n");
-			const combinedDiff = summaryFiles
-				.filter((f) => f.diff)
-				.map((f) => `*** Update File: ${f.path}\n${f.diff}`)
-				.join("\n\n");
-			const firstChangedLine = summaryFiles.find((f) => f.firstChangedLine !== undefined)?.firstChangedLine;
-
-			if (totalApplied === 0) {
-				const err = sections.join("\n\n") || header;
-				throw new Error(err);
-			}
-
-			return {
-				content: [{ type: "text" as const, text }],
-				details: { diff: combinedDiff, files: summaryFiles, firstChangedLine },
-			};
+			// Solo path: only this edit call in the turn (or registry not seeded,
+			// e.g. tests/RPC).
+			const soloResults = await processBatchedEdits([{ toolCallId, files: input.files }], cwd, ops, signal);
+			return unwrapBatchedResult(toolCallId, soloResults);
 		},
 
 		renderCall(args, theme, context) {

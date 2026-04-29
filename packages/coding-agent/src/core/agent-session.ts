@@ -82,6 +82,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
+import { registerTurnToolCalls } from "./tools/turn-batch-registry.js";
 
 // ============================================================================
 // Skill Block Parsing
@@ -371,7 +372,16 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
-		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+		this.agent.beforeToolCall = async ({ assistantMessage, toolCall, args }) => {
+			// Seed the per-turn edit batching registry with every tool call in the
+			// current assistant message. The edit tool reads this on entry to merge
+			// sibling edit calls into a single batched execution (Layer 2 batching,
+			// matching dirac's groupBlocksByPath flow).
+			const toolCalls = assistantMessage.content.filter(
+				(c): c is Extract<typeof c, { type: "toolCall" }> => c.type === "toolCall",
+			);
+			registerTurnToolCalls(toolCalls);
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
