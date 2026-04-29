@@ -141,6 +141,36 @@ function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
+/**
+ * Build the home-screen banner: an ASCII strawberry next to block-letter "ave".
+ * Colors come from the active theme so it adapts to light/dark/custom themes.
+ */
+function buildAveBanner(): string {
+	const leaf = (s: string) => theme.fg("success", s);
+	const berry = (s: string) => theme.fg("accent", s);
+	const seed = (s: string) => theme.fg("warning", s);
+	const word = (s: string) => theme.bold(theme.fg("accent", s));
+
+	// Strawberry: leafy crown on top, plump body with seeds, tapered point.
+	// Each rendered line is 13 cells wide so the figlet to the right is column-aligned.
+	const s1 = `${leaf("    .,;,.    ")}  `; //  13
+	const s2 = `${leaf("    '\\|/'    ")}  `; //  13
+	const s3 = `${berry("   .-' '-.   ")}  `; //  13
+	const s4 = `${berry("  ; ")}${seed("*")}${berry(" . ")}${seed("*")}${berry(" ;  ")}  `; //  13
+	const s5 = `${berry("  ; . ")}${seed("*")}${berry(" . ;  ")}  `; //  13
+	const s6 = `${berry("    \\ . /    ")}  `; //  13
+	const s7 = `${berry("     \\./     ")}  `; //  13
+
+	// Block-letter "ave" (figlet "Standard"), 4 visible lines.
+	const a1 = word("  __ ___   _____ ");
+	const a2 = word(" / _` \\ \\ / / _ \\");
+	const a3 = word("| (_| |\\ V /  __/");
+	const a4 = word(" \\__,_| \\_/ \\___|");
+
+	// Vertically center "ave" against the 7-line strawberry (rows 2-5).
+	return [s1, `${s2}${a1}`, `${s3}${a2}`, `${s4}${a3}`, `${s5}${a4}`, s6, s7].join("\n");
+}
+
 class ExpandableText extends Text implements Expandable {
 	constructor(
 		private readonly getCollapsedText: () => string,
@@ -591,7 +621,7 @@ export class InteractiveMode {
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
+			const logo = `${buildAveBanner()}\n${theme.fg("dim", `v${this.version}`)}`;
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -628,13 +658,9 @@ export class InteractiveMode {
 				"dim",
 				`Press ${keyText("app.tools.expand")} to show full startup help and loaded resources.`,
 			);
-			const onboarding = theme.fg(
-				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
-			);
 			this.builtInHeader = new ExpandableText(
-				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-				() => `${logo}\n${expandedInstructions}\n\n${onboarding}`,
+				() => `${logo}\n${compactInstructions}\n${compactOnboarding}`,
+				() => `${logo}\n${expandedInstructions}`,
 				this.getStartupExpansionState(),
 				1,
 				0,
@@ -1283,7 +1309,8 @@ export class InteractiveMode {
 		force?: boolean;
 		showDiagnosticsWhenQuiet?: boolean;
 	}): void {
-		const showListing = options?.force || this.options.verbose || !this.settingsManager.getQuietStartup();
+		// ave fork: never auto-list loaded resources on startup; still surface diagnostics.
+		const showListing = options?.force === true;
 		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
 		if (!showListing && !showDiagnostics) {
 			return;
