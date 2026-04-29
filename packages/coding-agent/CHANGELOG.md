@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-04-29
+
+### Changed
+
+- Renamed package to `@ichigo.moe/ave` with `ave` CLI binary.
+- Updated default theme and main screen, including new strawberry ASCII art.
+- Updated system prompt to better match ForgeCode and to prefer batched edits.
+
+### Added
+
+- Layer 2 batching support for tool calls.
+- Dirac hash-anchored edits with batching.
+
 ## [0.70.6] - 2026-04-28
 
 ### New Features
