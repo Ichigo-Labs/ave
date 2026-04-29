@@ -9,6 +9,8 @@ import { getLanguageFromPath, highlightCode } from "../../modes/interactive/them
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { AnchorStateManager } from "./anchor-state-manager.js";
+import { formatLineWithHash, stripHashes } from "./line-hashing.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -93,7 +95,9 @@ function formatReadResult(
 	showImages: boolean,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
-	const output = getTextOutput(result as any, showImages);
+	// The text returned to the model is hash-anchored. Strip anchors before rendering
+	// so the user sees clean source in the TUI; the model still sees them in the tool result.
+	const output = stripHashes(getTextOutput(result as any, showImages));
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
@@ -196,6 +200,9 @@ export function createReadToolDefinition(
 								const textContent = buffer.toString("utf-8");
 								const allLines = textContent.split("\n");
 								const totalFileLines = allLines.length;
+								// Reconcile anchors for the whole file so anchors stay stable across reads.
+								const anchors = AnchorStateManager.reconcile(absolutePath, allLines);
+								const hashedLines = allLines.map((line, i) => formatLineWithHash(line, anchors[i]));
 								// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
 								const startLine = offset ? Math.max(0, offset - 1) : 0;
 								const startLineDisplay = startLine + 1;
@@ -208,17 +215,17 @@ export function createReadToolDefinition(
 								// If limit is specified by the user, honor it first. Otherwise truncateHead decides.
 								if (limit !== undefined) {
 									const endLine = Math.min(startLine + limit, allLines.length);
-									selectedContent = allLines.slice(startLine, endLine).join("\n");
+									selectedContent = hashedLines.slice(startLine, endLine).join("\n");
 									userLimitedLines = endLine - startLine;
 								} else {
-									selectedContent = allLines.slice(startLine).join("\n");
+									selectedContent = hashedLines.slice(startLine).join("\n");
 								}
 								// Apply truncation, respecting both line and byte limits.
 								const truncation = truncateHead(selectedContent);
 								let outputText: string;
 								if (truncation.firstLineExceedsLimit) {
 									// First line alone exceeds the byte limit. Point the model at a bash fallback.
-									const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
+									const firstLineSize = formatSize(Buffer.byteLength(hashedLines[startLine], "utf-8"));
 									outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
 									details = { truncation };
 								} else if (truncation.truncated) {

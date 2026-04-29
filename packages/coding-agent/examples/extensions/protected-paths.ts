@@ -15,14 +15,26 @@ export default function (pi: ExtensionAPI) {
 			return undefined;
 		}
 
-		const path = event.input.path as string;
-		const isProtected = protectedPaths.some((p) => path.includes(p));
-
-		if (isProtected) {
-			if (ctx.hasUI) {
-				ctx.ui.notify(`Blocked write to protected path: ${path}`, "warning");
+		// `write` carries a single path; `edit` now batches multiple files under
+		// `files: [{path, edits}]`. Collect every targeted path so we can flag any
+		// protected entry.
+		const paths: string[] = [];
+		const input = event.input as { path?: unknown; files?: unknown };
+		if (typeof input.path === "string") {
+			paths.push(input.path);
+		}
+		if (Array.isArray(input.files)) {
+			for (const fe of input.files) {
+				if (fe && typeof fe.path === "string") paths.push(fe.path);
 			}
-			return { block: true, reason: `Path "${path}" is protected` };
+		}
+
+		const blocked = paths.find((p) => protectedPaths.some((proj) => p.includes(proj)));
+		if (blocked) {
+			if (ctx.hasUI) {
+				ctx.ui.notify(`Blocked write to protected path: ${blocked}`, "warning");
+			}
+			return { block: true, reason: `Path "${blocked}" is protected` };
 		}
 
 		return undefined;

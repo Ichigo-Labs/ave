@@ -73,13 +73,35 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			"tool-2",
-			{ path: "README.md", oldText: "before", newText: "after" },
+			{
+				files: [
+					{
+						path: "README.md",
+						edits: [
+							{
+								edit_type: "replace",
+								anchor: "Foo\u00a7before",
+								end_anchor: "Foo\u00a7before",
+								text: "after",
+							},
+						],
+					},
+				],
+			},
 			{},
 			overrideDefinition,
 			createFakeTui(),
 			process.cwd(),
 		);
-		component.updateResult({ content: [], details: { diff: "+1 after", firstChangedLine: 1 }, isError: false });
+		component.updateResult({
+			content: [],
+			details: {
+				diff: "+1 after",
+				firstChangedLine: 1,
+				files: [{ path: "README.md", appliedCount: 1, failedCount: 0, diff: "+1 after", firstChangedLine: 1 }],
+			},
+			isError: false,
+		});
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("edit");
 		expect(rendered).toContain("README.md");

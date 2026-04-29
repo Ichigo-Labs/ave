@@ -165,7 +165,9 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("edit "));
-			text += theme.fg("accent", args.path);
+			const files = Array.isArray(args.files) ? args.files : [];
+			const label = files.length === 1 ? files[0]?.path : files.length === 0 ? "..." : `${files.length} files`;
+			text += theme.fg("accent", label ?? "...");
 			return new Text(text, 0, 0);
 		},
 

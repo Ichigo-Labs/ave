@@ -219,8 +219,10 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme, _context) {
-			const path = shortenPath(args.path || "");
-			const pathDisplay = path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
+			const files = Array.isArray(args.files) ? args.files : [];
+			const label =
+				files.length === 1 ? shortenPath(files[0]?.path ?? "") : files.length === 0 ? "" : `${files.length} files`;
+			const pathDisplay = label ? theme.fg("accent", label) : theme.fg("toolOutput", "...");
 
 			return new Text(`${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`, 0, 0);
 		},

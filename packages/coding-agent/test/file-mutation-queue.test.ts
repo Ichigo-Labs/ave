@@ -1,10 +1,18 @@
 import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AnchorStateManager } from "../src/core/tools/anchor-state-manager.js";
 import { createEditTool } from "../src/core/tools/edit.js";
 import { withFileMutationQueue } from "../src/core/tools/file-mutation-queue.js";
+import { formatLineWithHash } from "../src/core/tools/line-hashing.js";
 import { createWriteTool } from "../src/core/tools/write.js";
+
+function anchorFor(absolutePath: string, content: string, oneIndexedLine: number): string {
+	const lines = content.split(/\r?\n/);
+	const anchors = AnchorStateManager.reconcile(absolutePath, lines);
+	return formatLineWithHash(lines[oneIndexedLine - 1], anchors[oneIndexedLine - 1]);
+}
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,10 +95,23 @@ describe("withFileMutationQueue", () => {
 });
 
 describe("built-in edit and write tools", () => {
-	it("preserves both parallel edits on the same file", async () => {
+	beforeEach(() => {
+		AnchorStateManager.reset();
+	});
+
+	it("serializes parallel edits on the same file (both apply)", async () => {
 		const dir = await createTempDir();
 		const filePath = join(dir, "parallel-edit.txt");
-		await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");
+		const original = "alpha\nbeta\ngamma\n";
+		await writeFile(filePath, original, "utf8");
+
+		// Compute both anchors against the original file before either edit runs.
+		// The two edits target different lines, so when the second edit re-reads
+		// the file (after the first has applied) its anchor word is preserved by
+		// AnchorStateManager (the unchanged line keeps its anchor) and the line
+		// content still matches.
+		const alpha = anchorFor(filePath, original, 1);
+		const beta = anchorFor(filePath, original, 2);
 
 		const editTool = createEditTool(dir, {
 			operations: {
@@ -108,8 +129,22 @@ describe("built-in edit and write tools", () => {
 		});
 
 		await Promise.all([
-			editTool.execute("call-1", { path: filePath, edits: [{ oldText: "alpha", newText: "ALPHA" }] }),
-			editTool.execute("call-2", { path: filePath, edits: [{ oldText: "beta", newText: "BETA" }] }),
+			editTool.execute("call-1", {
+				files: [
+					{
+						path: filePath,
+						edits: [{ edit_type: "replace", anchor: alpha, end_anchor: alpha, text: "ALPHA" }],
+					},
+				],
+			}),
+			editTool.execute("call-2", {
+				files: [
+					{
+						path: filePath,
+						edits: [{ edit_type: "replace", anchor: beta, end_anchor: beta, text: "BETA" }],
+					},
+				],
+			}),
 		]);
 
 		const content = await readFile(filePath, "utf8");
@@ -119,7 +154,10 @@ describe("built-in edit and write tools", () => {
 	it("shares the queue between edit and write", async () => {
 		const dir = await createTempDir();
 		const filePath = join(dir, "mixed.txt");
-		await writeFile(filePath, "original\n", "utf8");
+		const original = "original\n";
+		await writeFile(filePath, original, "utf8");
+
+		const anchor = anchorFor(filePath, original, 1);
 
 		const editTool = createEditTool(dir, {
 			operations: {
@@ -146,8 +184,12 @@ describe("built-in edit and write tools", () => {
 		});
 
 		const editPromise = editTool.execute("call-1", {
-			path: filePath,
-			edits: [{ oldText: "original", newText: "edited" }],
+			files: [
+				{
+					path: filePath,
+					edits: [{ edit_type: "replace", anchor, end_anchor: anchor, text: "edited" }],
+				},
+			],
 		});
 		await delay(5);
 		const writePromise = writeTool.execute("call-2", {
