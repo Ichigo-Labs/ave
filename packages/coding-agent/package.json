@@ -1,13 +1,16 @@
 {
-	"name": "@mariozechner/pi-coding-agent",
+	"name": "@ichigo.moe/ave",
 	"version": "0.70.6",
-	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"description": "ave: a fork of pi-coding-agent (coding agent CLI with read/bash/edit/write tools and session management)",
 	"type": "module",
 	"piConfig": {
 		"configDir": ".pi"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"ave": "dist/cli.js"
+	},
+	"publishConfig": {
+		"access": "public"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
