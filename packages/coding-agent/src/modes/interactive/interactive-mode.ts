@@ -142,33 +142,46 @@ function isExpandable(obj: unknown): obj is Expandable {
 }
 
 /**
- * Build the home-screen banner: an ASCII strawberry next to block-letter "ave".
+ * Build the home-screen banner: a Braille-art strawberry next to block-letter "ave".
  * Colors come from the active theme so it adapts to light/dark/custom themes.
  */
 function buildAveBanner(): string {
 	const leaf = (s: string) => theme.fg("success", s);
 	const berry = (s: string) => theme.fg("accent", s);
-	const seed = (s: string) => theme.fg("warning", s);
 	const word = (s: string) => theme.bold(theme.fg("accent", s));
 
-	// Strawberry: leafy crown on top, plump body with seeds, tapered point.
-	// Each rendered line is 13 cells wide so the figlet to the right is column-aligned.
-	const s1 = `${leaf("    .,;,.    ")}  `; //  13
-	const s2 = `${leaf("    '\\|/'    ")}  `; //  13
-	const s3 = `${berry("   .-' '-.   ")}  `; //  13
-	const s4 = `${berry("  ; ")}${seed("*")}${berry(" . ")}${seed("*")}${berry(" ;  ")}  `; //  13
-	const s5 = `${berry("  ; . ")}${seed("*")}${berry(" . ;  ")}  `; //  13
-	const s6 = `${berry("    \\ . /    ")}  `; //  13
-	const s7 = `${berry("     \\./     ")}  `; //  13
+	// 13-line, 20-cell-wide Braille strawberry. Top two rows are the leafy
+	// crown; the rest is the berry body.
+	const strawberry = [
+		"⠀⠀⠀⠀⠀⢀⡀⠀⠀⠀⠀⠀⡄⠀⠀⠀⠀⢀⠀⠀",
+		"⠀⠀⠀⠀⠀⠀⣏⠓⠒⠤⣰⠋⠹⡄⠀⣠⠞⣿⠀⠀",
+		"⠀⠀⠀⢀⠄⠂⠙⢦⡀⠐⠨⣆⠁⣷⣮⠖⠋⠉⠁⠀",
+		"⠀⠀⡰⠁⠀⠮⠇⠀⣩⠶⠒⠾⣿⡯⡋⠩⡓⢦⣀⡀",
+		"⠀⡰⢰⡹⠀⠀⠲⣾⣁⣀⣤⠞⢧⡈⢊⢲⠶⠶⠛⠁",
+		"⢀⠃⠀⠀⠀⣌⡅⠀⢀⡀⠀⠀⣈⠻⠦⣤⣿⡀⠀⠀",
+		"⠸⣎⠇⠀⠀⡠⡄⠀⠷⠎⠀⠐⡶⠁⠀⠀⣟⡇⠀⠀",
+		"⡇⠀⡠⣄⠀⠷⠃⠀⠀⡤⠄⠀⠀⣔⡰⠀⢩⠇⠀⠀",
+		"⡇⠀⠻⠋⠀⢀⠤⠀⠈⠛⠁⠀⢀⠉⠁⣠⠏⠀⠀⠀",
+		"⣷⢰⢢⠀⠀⠘⠚⠀⢰⣂⠆⠰⢥⡡⠞⠁⠀⠀⠀⠀",
+		"⠸⣎⠋⢠⢢⠀⢠⢀⠀⠀⣠⠴⠋⠀⠀⠀⠀⠀⠀⠀",
+		"⠀⠘⠷⣬⣅⣀⣬⡷⠖⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+		"⠀⠀⠀⠀⠈⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+	];
 
 	// Block-letter "ave" (figlet "Standard"), 4 visible lines.
-	const a1 = word("  __ ___   _____ ");
-	const a2 = word(" / _` \\ \\ / / _ \\");
-	const a3 = word("| (_| |\\ V /  __/");
-	const a4 = word(" \\__,_| \\_/ \\___|");
+	const ave = ["  __ ___   _____ ", " / _` \\ \\ / / _ \\", "| (_| |\\ V /  __/", " \\__,_| \\_/ \\___|"];
+	const aveBlank = " ".repeat(ave[0].length);
 
-	// Vertically center "ave" against the 7-line strawberry (rows 2-5).
-	return [s1, `${s2}${a1}`, `${s3}${a2}`, `${s4}${a3}`, `${s5}${a4}`, s6, s7].join("\n");
+	// Vertically center "ave" against the strawberry (rows 4..7 of 13).
+	const aveStart = 4;
+	return strawberry
+		.map((row, i) => {
+			const colored = i < 2 ? leaf(row) : berry(row);
+			const aveIdx = i - aveStart;
+			const aveLine = aveIdx >= 0 && aveIdx < ave.length ? word(ave[aveIdx]) : aveBlank;
+			return `${colored}   ${aveLine}`;
+		})
+		.join("\n");
 }
 
 class ExpandableText extends Text implements Expandable {
