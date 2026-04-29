@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- OpenRouter requests now default to sorting upstream providers by throughput and filtering quantizations to `fp8` plus `unknown`, avoiding `fp4` providers.
+- `OpenAICompletionsOptions` gained `openRouterRouting` (per-request routing override merged with model defaults) and `onRoutedProvider` (callback invoked once with the upstream provider OpenRouter selected) so callers can pin subsequent requests for cache stickiness.
+
 ## [0.70.6] - 2026-04-28
 
 ### Added

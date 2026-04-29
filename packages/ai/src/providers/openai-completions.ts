@@ -20,6 +20,7 @@ import type {
 	Message,
 	Model,
 	OpenAICompletionsCompat,
+	OpenRouterRouting,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -77,6 +78,18 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	/**
+	 * OpenRouter provider routing overrides for this request.
+	 * Merged on top of `model.compat.openRouterRouting` and built-in defaults.
+	 * Only applied when the request targets `openrouter.ai`.
+	 */
+	openRouterRouting?: OpenRouterRouting;
+	/**
+	 * Optional callback invoked once when the upstream OpenRouter response
+	 * reveals which provider was selected. Use this to pin subsequent requests
+	 * to the same provider for prompt-cache stickiness.
+	 */
+	onRoutedProvider?: (provider: string) => void;
 }
 
 interface OpenAICompatCacheControl {
@@ -201,12 +214,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				}
 			};
 
+			let routedProviderEmitted = false;
+
 			for await (const chunk of openaiStream) {
 				if (!chunk || typeof chunk !== "object") continue;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
 				// and each chunk in a streamed completion carries the same id.
 				output.responseId ||= chunk.id;
+				// OpenRouter exposes the upstream provider it routed to via a top-level
+				// `provider` field on every chunk. Surface it once so callers can pin
+				// subsequent requests to the same provider for cache stickiness.
+				if (!routedProviderEmitted) {
+					const chunkProvider = (chunk as { provider?: unknown }).provider;
+					if (typeof chunkProvider === "string" && chunkProvider.length > 0) {
+						routedProviderEmitted = true;
+						options?.onRoutedProvider?.(chunkProvider);
+					}
+				}
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model);
 				}
@@ -408,12 +433,17 @@ export const streamSimpleOpenAICompletions: StreamFunction<"openai-completions",
 
 	const base = buildBaseOptions(model, options, apiKey);
 	const reasoningEffort = supportsXhigh(model) ? options?.reasoning : clampReasoning(options?.reasoning);
-	const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
+	const extOptions = options as OpenAICompletionsOptions | undefined;
+	const toolChoice = extOptions?.toolChoice;
+	const openRouterRouting = extOptions?.openRouterRouting;
+	const onRoutedProvider = extOptions?.onRoutedProvider;
 
 	return streamOpenAICompletions(model, context, {
 		...base,
 		reasoningEffort,
 		toolChoice,
+		openRouterRouting,
+		onRoutedProvider,
 	} satisfies OpenAICompletionsOptions);
 };
 
@@ -552,9 +582,15 @@ function buildParams(
 		(params as any).reasoning_effort = mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap);
 	}
 
-	// OpenRouter provider routing preferences
-	if (model.baseUrl.includes("openrouter.ai") && model.compat?.openRouterRouting) {
-		(params as any).provider = model.compat.openRouterRouting;
+	// OpenRouter provider routing preferences (merge defaults + model.compat + per-call options)
+	if (model.baseUrl.includes("openrouter.ai")) {
+		const merged: OpenRouterRouting = {
+			...(compat.openRouterRouting ?? {}),
+			...(options?.openRouterRouting ?? {}),
+		};
+		if (Object.keys(merged).length > 0) {
+			(params as any).provider = merged;
+		}
 	}
 
 	// Vercel AI Gateway provider routing preferences
@@ -1079,7 +1115,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
 					? "openrouter"
 					: "openai",
-		openRouterRouting: {},
+		openRouterRouting:
+			provider === "openrouter" || baseUrl.includes("openrouter.ai")
+				? { sort: "throughput", quantizations: ["fp8", "unknown"] }
+				: {},
 		vercelGatewayRouting: {},
 		zaiToolStream: false,
 		supportsStrictMode: true,
@@ -1112,7 +1151,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 			model.compat.requiresReasoningContentOnAssistantMessages ??
 			detected.requiresReasoningContentOnAssistantMessages,
 		thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
-		openRouterRouting: model.compat.openRouterRouting ?? {},
+		openRouterRouting: model.compat.openRouterRouting ?? detected.openRouterRouting,
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,

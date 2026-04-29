@@ -310,6 +310,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
+	// Sticky OpenRouter upstream provider chosen on the first response of the
+	// session. Reused on subsequent requests via routing `only` so prompt caching
+	// stays warm with the same upstream provider.
+	let lockedOpenRouterProvider: string | undefined;
+
 	agent = new Agent({
 		initialState: {
 			systemPrompt: "",
@@ -325,6 +330,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const attributionHeaders = getAttributionHeaders(model, settingsManager);
+
+			// Pin the OpenRouter upstream provider for the rest of the session once
+			// we learn which provider it routed to. This keeps prompt caches warm
+			// across turns, since OpenRouter caches are per-upstream-provider.
+			const isOpenRouter = model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai");
+			const openRouterRouting =
+				isOpenRouter && lockedOpenRouterProvider
+					? { only: [lockedOpenRouterProvider], allow_fallbacks: false }
+					: undefined;
+			const onRoutedProvider = isOpenRouter
+				? (provider: string) => {
+						if (!lockedOpenRouterProvider) {
+							lockedOpenRouterProvider = provider;
+						}
+					}
+				: undefined;
+
 			return streamSimple(model, context, {
 				...options,
 				apiKey: auth.apiKey,
@@ -335,6 +357,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					attributionHeaders || auth.headers || options?.headers
 						? { ...attributionHeaders, ...auth.headers, ...options?.headers }
 						: undefined,
+				...(openRouterRouting ? { openRouterRouting } : {}),
+				...(onRoutedProvider ? { onRoutedProvider } : {}),
 			});
 		},
 		onPayload: async (payload, _model) => {
