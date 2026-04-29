@@ -7,7 +7,7 @@ Fork of [pi](https://github.com/badlogic/pi-mono/tree/main) with [dirac](https:/
 - Hash-Anchored Edits.
 - Multi-File Batching.
 
-That reduce token costs and improve speed while maintaining quality.
+These reduce token costs and improve speed while maintaining quality.
 
 ## Installation
 
