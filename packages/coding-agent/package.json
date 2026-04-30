@@ -1,6 +1,6 @@
 {
 	"name": "@ichigo.moe/ave",
-	"version": "0.71.0",
+	"version": "0.72.0",
 	"description": "ave: a fork of pi-coding-agent (coding agent CLI with read/bash/edit/write tools and session management)",
 	"type": "module",
 	"piConfig": {
@@ -28,6 +28,7 @@
 		"dist",
 		"docs",
 		"examples",
+		"README.md",
 		"CHANGELOG.md"
 	],
 	"scripts": {
@@ -90,11 +91,11 @@
 		"tui",
 		"agent"
 	],
-	"author": "Mario Zechner",
+	"author": "ichigo-Labs",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"url": "git+https://github.com/ichigo-Labs/ave.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

@@ -1,10 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [0.72.0] - 2026-04-29
 
 ### Changed
 
 - OpenRouter sessions now sort routing by throughput and only use providers running `fp8` or unspecified quantizations (avoiding `fp4`). The upstream provider chosen on the first response is pinned via routing `only` for the rest of the session so prompt caches stay warm.
+
+## [Unreleased]
+
+### Fixed
+
+- Fixed npm package README showing upstream pi README instead of ave README.
+- Fixed repository URL in package.json pointing to upstream repo instead of `ichigo-Labs/ave`.
 
 ## [0.71.0] - 2026-04-29
 
