@@ -22,13 +22,43 @@
 - After code changes (not documentation changes): `npm run check` (get full output, no tail). Fix all errors, warnings, and infos before committing.
 - Note: `npm run check` does not run tests.
 - NEVER run: `npm run dev`, `npm run build`, `npm test`
-- Only run specific tests if user instructs: `npx tsx ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts`
-- Run tests from the package root, not the repo root.
+- Only run specific tests if user instructs: `npx vitest --run test/specific.test.ts`
+- Run tests from the repo root.
 - If you create or modify a test file, you MUST run that test file and iterate until it passes.
-- When writing tests, run them, identify issues in either the test or implementation, and iterate until fixed.
-- For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` plus the faux provider. Do not use real provider APIs, real API keys, or paid tokens.
-- Put issue-specific regressions under `packages/coding-agent/test/suite/regressions/` and name them `<issue-number>-<short-slug>.test.ts`.
+- TUI tests use Node.js test runner, not vitest: `npx tsx --test test/tui/fuzzy.test.ts`
 - NEVER commit unless user asks
+
+## Project Structure
+
+This is a single package (`@ichigo.moe/ave`). All source is under `src/`:
+
+- `src/ai/` - Unified LLM API with provider implementations
+- `src/agent/` - Agent core with tool calling and state management
+- `src/tui/` - Terminal UI library with differential rendering
+- `src/core/` - Coding agent core (agent session, tools, extensions, etc.)
+- `src/modes/` - Run modes (interactive, print, rpc)
+- `src/cli/` - CLI argument parsing
+- `src/utils/` - Utility functions
+- `test/` - All tests
+- `test/ai/` - AI package tests
+- `test/agent/` - Agent package tests
+- `test/tui/` - TUI package tests (Node.js test runner)
+- `test/suite/` - Integration/regression tests
+- `docs/` - Documentation
+- `examples/` - Extension and SDK examples
+- `scripts/` - Build and utility scripts
+
+### Package Exports
+
+The package exposes subpath exports for extensions:
+
+- `@ichigo.moe/ave` - Main entry point
+- `@ichigo.moe/ave/ai` - AI API
+- `@ichigo.moe/ave/ai/oauth` - OAuth utilities
+- `@ichigo.moe/ave/ai/bedrock-provider` - Bedrock provider module
+- `@ichigo.moe/ave/agent` - Agent core
+- `@ichigo.moe/ave/tui` - TUI library
+- `@ichigo.moe/ave/hooks` - Extension hooks
 
 ## Contribution Gate
 
@@ -39,12 +69,6 @@
 - Issues that do not meet the quality bar in `CONTRIBUTING.md` are not reopened and do not receive a reply
 - `lgtmi` approves future issues
 - `lgtm` approves future issues and rights to submit PRs
-
-When creating issues:
-
-- Add `pkg:*` labels to indicate which package(s) the issue affects
-  - Available labels: `pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:mom`, `pkg:pods`, `pkg:tui`, `pkg:web-ui`
-- If an issue spans multiple packages, add all relevant labels
 
 When posting issue/PR comments:
 
@@ -66,34 +90,34 @@ When closing issues via commit:
 - If the user approves: create a feature branch, pull PR, rebase on main, apply adjustments, commit, merge into main, push, close PR, and leave a comment in the user's tone
 - You never open PRs yourself. We work in feature branches until everything is according to the user's requirements, then merge into main, and push.
 
-## Testing pi Interactive Mode with tmux
+## Testing ave Interactive Mode with tmux
 
-To test pi's TUI in a controlled terminal environment:
+To test ave's TUI in a controlled terminal environment:
 
 ```bash
 # Create tmux session with specific dimensions
-tmux new-session -d -s pi-test -x 80 -y 24
+tmux new-session -d -s ave-test -x 80 -y 24
 
-# Start pi from source
-tmux send-keys -t pi-test "cd /Users/badlogic/workspaces/pi-mono && ./pi-test.sh" Enter
+# Start ave from source
+tmux send-keys -t ave-test "npx tsx src/cli.ts" Enter
 
 # Wait for startup, then capture output
-sleep 3 && tmux capture-pane -t pi-test -p
+sleep 3 && tmux capture-pane -t ave-test -p
 
 # Send input
-tmux send-keys -t pi-test "your prompt here" Enter
+tmux send-keys -t ave-test "your prompt here" Enter
 
 # Send special keys
-tmux send-keys -t pi-test Escape
-tmux send-keys -t pi-test C-o  # ctrl+o
+tmux send-keys -t ave-test Escape
+tmux send-keys -t ave-test C-o  # ctrl+o
 
 # Cleanup
-tmux kill-session -t pi-test
+tmux kill-session -t ave-test
 ```
 
 ## Changelog
 
-Location: `packages/*/CHANGELOG.md` (each package has its own)
+Location: `CHANGELOG.md`
 
 ### Format
 
@@ -115,21 +139,21 @@ Use these sections under `## [Unreleased]`:
 
 ### Attribution
 
-- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/badlogic/pi-mono/issues/123))`
-- **External contributions**: `Added feature X ([#456](https://github.com/badlogic/pi-mono/pull/456) by [@username](https://github.com/username))`
+- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/ichigo-Labs/ave/issues/123))`
+- **External contributions**: `Added feature X ([#456](https://github.com/ichigo-Labs/ave/pull/456) by [@username](https://github.com/username))`
 
-## Adding a New LLM Provider (packages/ai)
+## Adding a New LLM Provider
 
 Adding a new provider requires changes across multiple files:
 
-### 1. Core Types (`packages/ai/src/types.ts`)
+### 1. Core Types (`src/ai/types.ts`)
 
 - Add API identifier to `Api` type union (e.g., `"bedrock-converse-stream"`)
 - Create options interface extending `StreamOptions`
 - Add mapping to `ApiOptionsMap`
 - Add provider name to `KnownProvider` type union
 
-### 2. Provider Implementation (`packages/ai/src/providers/`)
+### 2. Provider Implementation (`src/ai/providers/`)
 
 Create provider file exporting:
 
@@ -141,24 +165,24 @@ Create provider file exporting:
 
 ### 3. Provider Exports and Lazy Registration
 
-- Add a package subpath export in `packages/ai/package.json` pointing at `./dist/providers/<provider>.js`
-- Add `export type` re-exports in `packages/ai/src/index.ts` for provider option types that should remain available from the root entry
-- Register the provider in `packages/ai/src/providers/register-builtins.ts` via lazy loader wrappers, do not statically import provider implementation modules there
-- Add credential detection in `packages/ai/src/env-api-keys.ts`
+- Add a package subpath export in `package.json` pointing at `./dist/ai/providers/<provider>.js`
+- Add `export type` re-exports in `src/ai/index.ts` for provider option types that should remain available from the root entry
+- Register the provider in `src/ai/providers/register-builtins.ts` via lazy loader wrappers, do not statically import provider implementation modules there
+- Add credential detection in `src/ai/env-api-keys.ts`
 
-### 4. Model Generation (`packages/ai/scripts/generate-models.ts`)
+### 4. Model Generation (`scripts/generate-models.ts`)
 
 - Add logic to fetch/parse models from provider source
 - Map to standardized `Model` interface
 
-### 5. Tests (`packages/ai/test/`)
+### 5. Tests (`test/ai/`)
 
 - Always add the provider to `stream.test.ts` with at least one representative model, even if it reuses an existing API implementation such as `openai-completions`.
 - Add the provider to the broader provider matrix where applicable: `tokens.test.ts`, `abort.test.ts`, `empty.test.ts`, `context-overflow.test.ts`, `image-limits.test.ts`, `unicode-surrogate.test.ts`, `tool-call-without-result.test.ts`, `image-tool-result.test.ts`, `total-tokens.test.ts`, `cross-provider-handoff.test.ts`.
 - For `cross-provider-handoff.test.ts`, add at least one provider/model pair. If the provider exposes multiple model families (for example GPT and Claude), add at least one pair per family.
 - For non-standard auth, create utility (e.g., `bedrock-utils.ts`) with credential detection.
 
-### 6. Coding Agent (`packages/coding-agent/`)
+### 6. Coding Agent Integration
 
 - `src/core/model-resolver.ts`: Add default model ID to `defaultModelPerProvider`
 - `src/modes/interactive/interactive-mode.ts`: Add API-key login display name to `API_KEY_LOGIN_PROVIDERS` so `/login` shows the provider for built-in API-key auth.
@@ -168,29 +192,7 @@ Create provider file exporting:
 
 ### 7. Documentation
 
-- `packages/ai/README.md`: Add to providers table, document options/auth, add env vars
-- `packages/ai/CHANGELOG.md`: Add entry under `## [Unreleased]`
-
-## Releasing
-
-**Lockstep versioning**: All packages always share the same version number. Every release updates all packages together.
-
-**Version semantics** (no major releases):
-
-- `patch`: Bug fixes and new features
-- `minor`: API breaking changes
-
-### Steps
-
-1. **Update CHANGELOGs**: Ensure all changes since last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md
-
-2. **Run release script**:
-   ```bash
-   npm run release:patch    # Fixes and additions
-   npm run release:minor    # API breaking changes
-   ```
-
-The script handles: version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+- Add entry under `## [Unreleased]` in `CHANGELOG.md`
 
 ## **CRITICAL** Git Rules for Parallel Agents **CRITICAL**
 
@@ -204,7 +206,7 @@ Multiple agents may work on different files in the same worktree simultaneously.
 - ALWAYS use `git add <specific-file-paths>` listing only files you modified
 - Before committing, run `git status` and verify you are only staging YOUR files
 - Track which files you created/modified/deleted during the session
-- It is always fine to include `packages/ai/src/models.generated.ts` in a commit alongside the actual files you want to commit
+- It is always fine to include `src/ai/models.generated.ts` in a commit alongside the actual files you want to commit
 
 ### Forbidden Git Operations
 
@@ -224,8 +226,8 @@ These commands can destroy other agents' work:
 git status
 
 # 2. Add ONLY your specific files
-git add packages/ai/src/providers/transform-messages.ts
-git add packages/ai/CHANGELOG.md
+git add src/ai/providers/transform-messages.ts
+git add CHANGELOG.md
 
 # 3. Commit
 git commit -m "fix(ai): description"

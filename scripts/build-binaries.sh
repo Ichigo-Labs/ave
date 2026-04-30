@@ -11,7 +11,7 @@
 #   --platform <name>   Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64)
 #
 # Output:
-#   packages/coding-agent/binaries/
+#   binaries/
 #     pi-darwin-arm64.tar.gz
 #     pi-darwin-x64.tar.gz
 #     pi-linux-x64.tar.gz
@@ -166,7 +166,7 @@ done
 
 echo ""
 echo "==> Build complete!"
-echo "Archives available in packages/coding-agent/binaries/"
+echo "Archives available in binaries/"
 ls -lh *.tar.gz *.zip 2>/dev/null || true
 echo ""
 echo "Extracted directories for testing:"
