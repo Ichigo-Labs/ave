@@ -6,7 +6,7 @@
 
 - OpenRouter sessions now sort routing by throughput and only use providers running `fp8` or unspecified quantizations (avoiding `fp4`). The upstream provider chosen on the first response is pinned via routing `only` for the rest of the session so prompt caches stay warm.
 
-## [Unreleased]
+## [0.72.1] - 2026-04-29
 
 ### Fixed
 
