@@ -8,7 +8,6 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createJiti } from "@mariozechner/jiti";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
@@ -19,7 +18,7 @@ import * as _bundledTypeboxValue from "typebox/value";
 import * as _bundledPiAgentCore from "../../agent/index.js";
 import * as _bundledPiAi from "../../ai/index.js";
 import * as _bundledPiAiOauth from "../../ai/oauth.js";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
+import { CONFIG_DIR_NAME, getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from @ichigo.moe/ave.
 import * as _bundledPiCodingAgent from "../../index.js";
@@ -59,6 +58,17 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 const require = createRequire(import.meta.url);
 
 /**
+ * Detect whether this module is running from the esbuild bundle at
+ * dist/bin/ave.js. In that case all `@ichigo.moe/ave/*` and `typebox` imports
+ * are already resolved statically into the bundle, so extensions should reuse
+ * those module instances via jiti's virtualModules instead of triggering a
+ * fresh filesystem resolve of the whole ai/agent/tui/typebox graph.
+ */
+function isRunningFromBundle(): boolean {
+	return import.meta.url.includes("/dist/bin/");
+}
+
+/**
  * Get aliases for jiti (used in Node.js/development mode).
  * In Bun binary mode, virtualModules is used instead.
  */
@@ -67,8 +77,15 @@ let _aliases: Record<string, string> | null = null;
 function getAliases(): Record<string, string> {
 	if (_aliases) return _aliases;
 
-	const __dirname = path.dirname(fileURLToPath(import.meta.url));
-	const srcRoot = path.resolve(__dirname, "../..");
+	// Resolve the installed dist/ (or src/, when running via tsx) relative to the
+	// package root. Historically this was derived by walking up two parents from
+	// this file, but that breaks when the CLI is bundled to dist/bin/ave.js, so
+	// use getPackageDir() which walks up to the nearest package.json.
+	const packageDir = getPackageDir();
+	const srcRoot =
+		fs.existsSync(path.join(packageDir, "src")) && !fs.existsSync(path.join(packageDir, "dist"))
+			? path.join(packageDir, "src")
+			: path.join(packageDir, "dist");
 	const packageIndex = path.join(srcRoot, "index.js");
 
 	const typeboxEntry = require.resolve("typebox");
@@ -331,12 +348,20 @@ function createExtensionAPI(
 }
 
 async function loadExtensionModule(extensionPath: string) {
+	// Prefer virtualModules whenever our bundled modules are already present in
+	// memory (Bun binary OR the Node ESM bundle at dist/bin/ave.js). This avoids
+	// jiti re-resolving "@ichigo.moe/ave", "@ichigo.moe/ave/tui", "typebox"...
+	// against node_modules on every extension load, which otherwise drags the
+	// entire typebox tree (~670 files) through the filesystem at startup. In
+	// plain dev (tsx src/cli.ts) we still fall back to alias resolution so jiti
+	// can hand off to the node_modules copies.
+	const useVirtualModules = isBunBinary || isRunningFromBundle();
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
-		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
-		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
-		// In Node.js/dev: use aliases to resolve to node_modules paths
-		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
+		// With virtualModules, all bundled packages resolve from memory; tryNative
+		// must be off so jiti routes every import through its resolver.
+		// With aliases (dev mode), jiti uses aliases only for known entry names.
+		...(useVirtualModules ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });

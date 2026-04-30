@@ -3,6 +3,17 @@
 
 ## [Unreleased]
 
+## [0.72.2] - 2026-04-30
+
+### Changed
+
+- CLI cold startup is now roughly 10x faster. Three changes combine:
+  1. The CLI is shipped as an esbuild bundle at `dist/bin/ave.js` (with code-split chunks for the already-lazy provider modules) instead of loading `dist/cli.js` and its full module graph. Collapses ~1,100 file loads into ~30 for `--version` and ~175 for `--help`.
+  2. `cli-highlight` / `highlight.js` (~195 files, ~2s of CJS parsing on slow filesystems) is loaded lazily on first call to `highlightCode`, so startup and empty interactive prompts don't pay for it.
+  3. `undici`'s global dispatcher (~114 files, ~1.7s of CJS parsing on slow filesystems) is configured lazily from `src/utils/ensure-undici.ts` the first time a provider actually streams, instead of synchronously at the top of `cli.ts`. `ave --version`, `ave --help`, `ave --list-models`, and plain `ave` startup no longer parse the undici tree at all.
+  Measured on WSL `/mnt/c` (9p filesystem): `ave --version` 8.0s -> 0.49s, `ave --help` 9.0s -> 0.61s, `ave` (interactive first frame) 7.7s -> 0.88s. On native Linux fs with warm cache: `ave --version` 0.63s -> 0.23s, `ave` 0.80s -> 0.75s.
+  The unbundled `dist/` tree is unchanged and remains the source for the `@ichigo.moe/ave`, `/ai`, `/agent`, `/tui`, `/hooks` subpath exports.
+
 ## [0.72.0] - 2026-04-29
 
 ### Changed

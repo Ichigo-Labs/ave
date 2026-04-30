@@ -1,3 +1,5 @@
+import { ensureUndiciGlobalDispatcher } from "../../utils/ensure-undici.js";
+
 import { clearApiProviders, registerApiProvider } from "../api-registry.js";
 import type {
 	Api,
@@ -171,7 +173,10 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TSim
 	return (model, context, options) => {
 		const outer = new AssistantMessageEventStream();
 
-		loadModule()
+		// Configure undici's global dispatcher before any streaming HTTP so vLLM /
+		// slow-LLM stalls don't hit undici's 300s default bodyTimeout. Idempotent.
+		ensureUndiciGlobalDispatcher()
+			.then(() => loadModule())
 			.then((module) => {
 				const inner = module.stream(model, context, options);
 				forwardStream(outer, inner);
@@ -194,7 +199,10 @@ function createLazySimpleStream<
 	return (model, context, options) => {
 		const outer = new AssistantMessageEventStream();
 
-		loadModule()
+		// Configure undici's global dispatcher before any streaming HTTP so vLLM /
+		// slow-LLM stalls don't hit undici's 300s default bodyTimeout. Idempotent.
+		ensureUndiciGlobalDispatcher()
+			.then(() => loadModule())
 			.then((module) => {
 				const inner = module.streamSimple(model, context, options);
 				forwardStream(outer, inner);

@@ -1,13 +1,32 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import chalk from "chalk";
-import { highlight, supportsLanguage } from "cli-highlight";
+import type { highlight as CliHighlightFn, supportsLanguage as CliSupportsLanguageFn } from "cli-highlight";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { getCustomThemesDir, getThemesDir } from "../../../config.js";
 import type { SourceInfo } from "../../../core/source-info.js";
 import type { EditorTheme, MarkdownTheme, SelectListTheme } from "../../../tui/index.js";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
+
+// cli-highlight pulls in highlight.js (195 files, ~2s of CJS parsing on slow
+// filesystems like WSL /mnt/c). Load it lazily on first use so `ave` startup,
+// --version, --help, and an empty interactive prompt don't pay for it. Cached
+// after first call. Synchronous require is required because highlightCode()
+// is called from synchronous renderers that cannot await.
+const _cliHighlightRequire = createRequire(import.meta.url);
+interface CliHighlightModule {
+	highlight: typeof CliHighlightFn;
+	supportsLanguage: typeof CliSupportsLanguageFn;
+}
+let _cliHighlight: CliHighlightModule | undefined;
+function getCliHighlight(): CliHighlightModule {
+	if (!_cliHighlight) {
+		_cliHighlight = _cliHighlightRequire("cli-highlight") as CliHighlightModule;
+	}
+	return _cliHighlight;
+}
 
 // ============================================================================
 // Types & Schema
@@ -983,8 +1002,9 @@ function getCliHighlightTheme(t: Theme): CliHighlightTheme {
  * Returns array of highlighted lines.
  */
 export function highlightCode(code: string, lang?: string): string[] {
+	const cli = getCliHighlight();
 	// Validate language before highlighting to avoid stderr spam from cli-highlight
-	const validLang = lang && supportsLanguage(lang) ? lang : undefined;
+	const validLang = lang && cli.supportsLanguage(lang) ? lang : undefined;
 	// Skip highlighting when no valid language is specified. cli-highlight's
 	// auto-detection is unreliable and can misidentify prose as AppleScript,
 	// LiveCodeServer, etc., coloring random English words as keywords.
@@ -997,7 +1017,7 @@ export function highlightCode(code: string, lang?: string): string[] {
 		theme: getCliHighlightTheme(theme),
 	};
 	try {
-		return highlight(code, opts).split("\n");
+		return cli.highlight(code, opts).split("\n");
 	} catch {
 		return code.split("\n");
 	}
@@ -1091,8 +1111,9 @@ export function getMarkdownTheme(): MarkdownTheme {
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		highlightCode: (code: string, lang?: string): string[] => {
+			const cli = getCliHighlight();
 			// Validate language before highlighting to avoid stderr spam from cli-highlight
-			const validLang = lang && supportsLanguage(lang) ? lang : undefined;
+			const validLang = lang && cli.supportsLanguage(lang) ? lang : undefined;
 			// Skip highlighting when no valid language is specified. cli-highlight's
 			// auto-detection is unreliable and can misidentify prose as AppleScript,
 			// LiveCodeServer, etc., coloring random English words as keywords.
@@ -1105,7 +1126,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 				theme: getCliHighlightTheme(theme),
 			};
 			try {
-				return highlight(code, opts).split("\n");
+				return cli.highlight(code, opts).split("\n");
 			} catch {
 				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
 			}
