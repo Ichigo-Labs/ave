@@ -9,6 +9,8 @@ Fork of [pi](https://github.com/badlogic/pi-mono/tree/main) with [dirac](https:/
 
 These reduce token costs and improve speed while maintaining quality.
 
+In addition, we use an adapted system prompt from ForgeCode, which scores high on the [Terminal-Bench](https://www.tbench.ai/) leaderboard.
+
 ## Installation
 
 ```sh
