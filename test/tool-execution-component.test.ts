@@ -134,7 +134,7 @@ describe("ToolExecutionComponent parity", () => {
 		const tool = createBashToolDefinition(process.cwd(), { operations });
 		const promise = tool.execute(
 			"tool-bash-1",
-			{ command: "sleep 10" },
+			{ command: "echo waiting-on-custom-ops" },
 			undefined,
 			(update) => updates.push(update as { content: Array<{ type: string; text?: string }>; details?: unknown }),
 			{} as never,

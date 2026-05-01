@@ -24,6 +24,22 @@ export {
 	InMemoryAuthStorageBackend,
 	type OAuthCredential,
 } from "./core/auth-storage.js";
+// Background bash task registry
+export {
+	type BackgroundTaskEvent,
+	type BackgroundTaskEventListener,
+	type BackgroundTaskInfo,
+	type BackgroundTaskKind,
+	type BackgroundTaskStatus,
+	getBackgroundTask,
+	killAllBackgroundTasks,
+	killBackgroundTask,
+	listBackgroundTasks,
+	looksLikePrompt,
+	spawnBackgroundTask,
+	subscribeBackgroundTaskData,
+	subscribeBackgroundTaskEvents,
+} from "./core/background-tasks.js";
 // Compaction
 export {
 	type BranchPreparation,
@@ -229,6 +245,12 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.js";
 export { createSyntheticSourceInfo } from "./core/source-info.js";
+// Bash timeouts
+export {
+	getDefaultBashTimeoutSeconds,
+	getMaxBashTimeoutSeconds,
+	resolveBashTimeoutSeconds,
+} from "./core/tools/bash-timeouts.js";
 // Tools
 export {
 	type BashOperations,

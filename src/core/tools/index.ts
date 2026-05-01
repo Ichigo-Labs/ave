@@ -8,6 +8,7 @@ export {
 	createBashTool,
 	createBashToolDefinition,
 	createLocalBashOperations,
+	detectBlockedSleepPattern,
 } from "./bash.js";
 export {
 	createEditTool,

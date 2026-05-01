@@ -17,7 +17,14 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.js";
+import {
+	type BackgroundTaskInfo,
+	killBackgroundTask,
+	spawnBackgroundTask,
+	subscribeBackgroundTaskData,
+} from "../background-tasks.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { getDefaultBashTimeoutSeconds, getMaxBashTimeoutSeconds, resolveBashTimeoutSeconds } from "./bash-timeouts.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
@@ -32,7 +39,23 @@ function getTempFilePath(): string {
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	timeout: Type.Optional(
+		Type.Number({
+			description: `Timeout in seconds. Defaults to ${getDefaultBashTimeoutSeconds()}s; values greater than ${getMaxBashTimeoutSeconds()}s are clamped.`,
+		}),
+	),
+	description: Type.Optional(
+		Type.String({
+			description:
+				'Short, concise description of what this command does in active voice (e.g. "List files in current directory", "Run unit tests"). Used for telemetry and the background task list.',
+		}),
+	),
+	run_in_background: Type.Optional(
+		Type.Boolean({
+			description:
+				"Set to true to run this command in the background. Returns immediately with a task id; you'll be notified when it completes. Read the output later by tailing the reported output file.",
+		}),
+	),
 });
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -40,6 +63,38 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Set if this call moved to the background (explicitly or via auto-background). */
+	backgroundTask?: BackgroundTaskInfo;
+	/** Set when a foreground run hit its timeout. */
+	timedOutSeconds?: number;
+}
+
+/**
+ * Detect a leading bare `sleep N` (with N >= 2) that should not run in the
+ * foreground. Allows fractional sleeps (`sleep 0.5`) since those are typically
+ * intentional pacing, not polling.
+ *
+ * Mirrors claude-code's detectBlockedSleepPattern.
+ */
+export function detectBlockedSleepPattern(command: string): string | null {
+	const trimmed = command.trim();
+	if (!trimmed) return null;
+	const firstSegment = trimmed.split(/[;&|]/)[0]?.trim() ?? "";
+	const m = /^sleep\s+(\d+)\s*$/.exec(firstSegment);
+	if (!m) return null;
+	const secs = Number.parseInt(m[1] ?? "", 10);
+	if (!Number.isFinite(secs) || secs < 2) return null;
+	const rest = trimmed.slice(firstSegment.length).replace(/^[;&|\s]+/, "");
+	return rest ? `sleep ${secs} followed by: ${rest}` : `standalone sleep ${secs}`;
+}
+
+const DISALLOWED_AUTO_BACKGROUND_COMMANDS = new Set(["sleep"]);
+
+function isAutoBackgroundAllowed(command: string): boolean {
+	const trimmed = command.trim();
+	if (!trimmed) return true;
+	const firstWord = trimmed.split(/\s+/)[0] ?? "";
+	return !DISALLOWED_AUTO_BACKGROUND_COMMANDS.has(firstWord);
 }
 
 /**
@@ -158,6 +213,15 @@ export interface BashToolOptions {
 	shellPath?: string;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/**
+	 * Disable background-task support. When true, `run_in_background: true` and
+	 * the auto-background-on-timeout path both fall back to running in the
+	 * foreground (or rejecting on timeout, in the auto-background case).
+	 *
+	 * Useful for environments where the bash backend is remote and cannot
+	 * outlive the parent process (e.g. SSH sessions).
+	 */
+	disableBackgroundTasks?: boolean;
 }
 
 const BASH_PREVIEW_LINES = 5;
@@ -270,6 +334,162 @@ function rebuildBashResultRenderComponent(
 	}
 }
 
+interface AutoBackgroundInput {
+	command: string;
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+	shellPath?: string;
+	description?: string;
+	timeoutSeconds: number;
+	signal?: AbortSignal;
+	onUpdate?: (partial: { content: { type: "text"; text: string }[]; details: BashToolDetails | undefined }) => void;
+}
+
+interface AutoBackgroundResult {
+	content: { type: "text"; text: string }[];
+	details: BashToolDetails | undefined;
+}
+
+async function runWithAutoBackground(input: AutoBackgroundInput): Promise<AutoBackgroundResult> {
+	const { command, cwd, env, shellPath, description, timeoutSeconds, signal, onUpdate } = input;
+
+	const handle = spawnBackgroundTask({
+		command,
+		cwd,
+		env,
+		shellPath,
+		description,
+		kind: "auto-timeout",
+	});
+	const { taskId, outputPath } = handle.info;
+
+	const chunks: Buffer[] = [];
+	let chunksBytes = 0;
+	const maxChunksBytes = DEFAULT_MAX_BYTES * 2;
+	const decoder = new TextDecoder();
+
+	const emitPartial = () => {
+		if (!onUpdate) return;
+		const fullBuffer = Buffer.concat(chunks);
+		const fullText = decoder.decode(fullBuffer, { stream: false });
+		const truncation = truncateTail(fullText);
+		onUpdate({
+			content: [{ type: "text", text: truncation.content || "" }],
+			details: {
+				truncation: truncation.truncated ? truncation : undefined,
+				fullOutputPath: outputPath,
+			},
+		});
+	};
+
+	if (onUpdate) {
+		onUpdate({ content: [], details: undefined });
+	}
+
+	const unsubscribeData = subscribeBackgroundTaskData(taskId, (data) => {
+		chunks.push(data);
+		chunksBytes += data.length;
+		while (chunksBytes > maxChunksBytes && chunks.length > 1) {
+			const removed = chunks.shift()!;
+			chunksBytes -= removed.length;
+		}
+		emitPartial();
+	});
+
+	let abortHandler: (() => void) | undefined;
+	if (signal) {
+		if (signal.aborted) {
+			killBackgroundTask(taskId);
+		} else {
+			abortHandler = () => {
+				killBackgroundTask(taskId);
+			};
+			signal.addEventListener("abort", abortHandler, { once: true });
+		}
+	}
+
+	let timeoutTimer: NodeJS.Timeout | undefined;
+	const timeoutPromise = new Promise<"timeout">((resolve) => {
+		timeoutTimer = setTimeout(() => resolve("timeout"), timeoutSeconds * 1000);
+		timeoutTimer.unref?.();
+	});
+
+	const completionPromise: Promise<BackgroundTaskInfo> = handle.completion;
+	const raceResult = await Promise.race([completionPromise, timeoutPromise]);
+
+	unsubscribeData?.();
+	if (timeoutTimer) clearTimeout(timeoutTimer);
+	if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+
+	// Auto-background: ran past the foreground budget. Leave it running.
+	if (raceResult === "timeout") {
+		const text = [
+			`Command exceeded the ${timeoutSeconds}-second foreground timeout and was moved to the background with ID: ${taskId}.`,
+			`It is still running — you will be notified when it completes. Output is being written to: ${outputPath}.`,
+		].join(" ");
+		return {
+			content: [{ type: "text", text }],
+			details: {
+				backgroundTask: handle.info,
+				timedOutSeconds: timeoutSeconds,
+			},
+		};
+	}
+
+	// Completed (or killed via abort). Build the synchronous result from chunks.
+	const final = raceResult;
+	const fullBuffer = Buffer.concat(chunks);
+	const fullOutput = decoder.decode(fullBuffer, { stream: false });
+	const truncation = truncateTail(fullOutput);
+
+	let outputText = truncation.content || "(no output)";
+	let details: BashToolDetails | undefined;
+	if (truncation.truncated) {
+		details = { truncation, fullOutputPath: outputPath };
+		const startLine = truncation.totalLines - truncation.outputLines + 1;
+		const endLine = truncation.totalLines;
+		if (truncation.lastLinePartial) {
+			const lastLineSize = formatSize(Buffer.byteLength(fullOutput.split("\n").pop() || "", "utf-8"));
+			outputText += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${outputPath}]`;
+		} else if (truncation.truncatedBy === "lines") {
+			outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${outputPath}]`;
+		} else {
+			outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${outputPath}]`;
+		}
+	}
+
+	if (final.status === "killed") {
+		const message = signal?.aborted ? "Command aborted" : "Command was killed";
+		const combined = outputText && outputText !== "(no output)" ? `${outputText}\n\n${message}` : message;
+		throw new Error(combined);
+	}
+
+	if (final.status === "failed") {
+		// Surface the spawn-time error (e.g. ENOENT for a missing shell) so the
+		// model sees the same diagnostic the foreground path would have produced.
+		if (final.errorMessage) {
+			throw new Error(final.errorMessage);
+		}
+		const codeLine = final.exitCode !== undefined ? `Command exited with code ${final.exitCode}` : "Command failed";
+		const combined = outputText && outputText !== "(no output)" ? `${outputText}\n\n${codeLine}` : codeLine;
+		throw new Error(combined);
+	}
+
+	return { content: [{ type: "text", text: outputText }], details };
+}
+
+function buildBashDescription(): string {
+	const def = getDefaultBashTimeoutSeconds();
+	const max = getMaxBashTimeoutSeconds();
+	return [
+		"Execute a bash command in the current working directory. Returns stdout and stderr.",
+		`Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file.`,
+		`Commands without an explicit timeout default to ${def}s; the maximum is ${max}s. Long-running commands that would otherwise hang the agent are killed at the timeout.`,
+		"For commands you don't need the result of right away (servers, builds, watchers, polling), pass `run_in_background: true`. The call returns immediately with a task id and an output file path; you'll be notified via a follow-up message when the command exits. Do not poll with `sleep`; do not use trailing `&`.",
+		"Bare leading `sleep N` (with N >= 2) is rejected. Use `run_in_background` for waits, or keep pacing sleeps to under 2 seconds.",
+	].join(" ");
+}
+
 export function createBashToolDefinition(
 	cwd: string,
 	options?: BashToolOptions,
@@ -277,21 +497,71 @@ export function createBashToolDefinition(
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
+	const backgroundDisabled = options?.disableBackgroundTasks === true;
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: buildBashDescription(),
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
 		parameters: bashSchema,
-		async execute(
-			_toolCallId,
-			{ command, timeout }: { command: string; timeout?: number },
-			signal?: AbortSignal,
-			onUpdate?,
-			_ctx?,
-		) {
+		async execute(_toolCallId, params: BashToolInput, signal?: AbortSignal, onUpdate?, _ctx?) {
+			const { command, timeout, description, run_in_background } = params;
+
+			// Block bare leading `sleep N` (N >= 2) unless explicitly backgrounded.
+			if (!run_in_background && !backgroundDisabled) {
+				const blocked = detectBlockedSleepPattern(command);
+				if (blocked) {
+					throw new Error(
+						`Blocked: ${blocked}. Run blocking commands in the background with run_in_background: true — you'll get a completion notification when done. If you genuinely need a delay (rate limiting, deliberate pacing), keep it under 2 seconds.`,
+					);
+				}
+			}
+
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+			const effectiveTimeout = resolveBashTimeoutSeconds(timeout);
+
+			// Explicit background path: spawn into the registry, return immediately.
+			if (run_in_background === true && !backgroundDisabled) {
+				const { info } = spawnBackgroundTask({
+					command: spawnContext.command,
+					cwd: spawnContext.cwd,
+					env: spawnContext.env,
+					shellPath: options?.shellPath,
+					description,
+					kind: "explicit",
+				});
+				const text = [
+					`Command running in background with ID: ${info.taskId}.`,
+					`Output is being written to: ${info.outputPath}.`,
+					"You will be notified when it completes — do not poll. To stop it, kill the process via the registry or by PID.",
+				].join(" ");
+				return {
+					content: [{ type: "text", text }],
+					details: { backgroundTask: info },
+				};
+			}
+
+			// Auto-background path: when no custom operations override is in play,
+			// run via the registry primitive so a foreground command that would
+			// otherwise time out can be transitioned into a background task instead
+			// of being killed. This path mirrors claude-code's
+			// `tengu_bash_command_timeout_backgrounded` behavior.
+			const useAutoBackground =
+				!backgroundDisabled && options?.operations === undefined && isAutoBackgroundAllowed(command);
+			if (useAutoBackground) {
+				return runWithAutoBackground({
+					command: spawnContext.command,
+					cwd: spawnContext.cwd,
+					env: spawnContext.env,
+					shellPath: options?.shellPath,
+					description,
+					timeoutSeconds: effectiveTimeout,
+					signal,
+					onUpdate,
+				});
+			}
+
 			if (onUpdate) {
 				onUpdate({ content: [], details: undefined });
 			}
@@ -347,7 +617,7 @@ export function createBashToolDefinition(
 				ops.exec(spawnContext.command, spawnContext.cwd, {
 					onData: handleData,
 					signal,
-					timeout,
+					timeout: effectiveTimeout,
 					env: spawnContext.env,
 				})
 					.then(({ exitCode }) => {
@@ -397,7 +667,11 @@ export function createBashToolDefinition(
 						} else if (err.message.startsWith("timeout:")) {
 							const timeoutSecs = err.message.split(":")[1];
 							if (output) output += "\n\n";
-							output += `Command timed out after ${timeoutSecs} seconds`;
+							output += `Command timed out after ${timeoutSecs} seconds.`;
+							if (!backgroundDisabled && isAutoBackgroundAllowed(command)) {
+								output +=
+									" Re-run with run_in_background: true if it needs to keep going — you'll get a completion notification.";
+							}
 							reject(new Error(output));
 						} else {
 							reject(err);

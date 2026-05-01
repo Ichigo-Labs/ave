@@ -522,8 +522,32 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
-		it("should respect timeout", async () => {
-			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
+		it("should auto-background long-running commands instead of erroring on timeout", async () => {
+			// `tail -f` would otherwise hang; with the auto-background path it's
+			// transitioned into a background task once the foreground budget is
+			// exceeded and the call resolves without throwing.
+			const result = await bashTool.execute("test-call-10", {
+				command: "tail -f /dev/null",
+				timeout: 1,
+			});
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toMatch(/exceeded the .*foreground timeout/);
+			expect(text).toMatch(/moved to the background with ID:/);
+		});
+
+		it("returns a timeout error for non-auto-backgroundable commands", async () => {
+			// Custom operations bypasses the auto-background path; the original
+			// timeout-error semantics still apply, including the hint nudging
+			// toward run_in_background.
+			const slowOps: import("../src/core/tools/bash.js").BashOperations = {
+				exec: (_cmd, _cwd, opts) =>
+					new Promise((_resolve, reject) => {
+						const t = setTimeout(() => reject(new Error("timeout:1")), opts.timeout ? opts.timeout * 1000 : 1000);
+						t.unref?.();
+					}),
+			};
+			const slow = createBashTool(testDir, { operations: slowOps });
+			await expect(slow.execute("test-call-10b", { command: "echo will-timeout", timeout: 1 })).rejects.toThrow(
 				/timed out/i,
 			);
 		});

@@ -3,6 +3,22 @@
 
 ## [Unreleased]
 
+## [0.73.0] - 2026-04-30
+
+### Added
+
+- Bash tool now has a default 120s timeout and a 600s max, both env-overridable (`BASH_DEFAULT_TIMEOUT_SECONDS`, `BASH_MAX_TIMEOUT_SECONDS`). Long-running commands no longer hang the agent indefinitely. Caller-provided timeouts above the max are clamped.
+- Bash tool gains `run_in_background: true` and `description` parameters. Backgrounded commands stream merged stdout/stderr to a `pi-bash-bg-<id>.log` temp file and return immediately with a task id and output path.
+- New process-global background task registry (`spawnBackgroundTask`, `getBackgroundTask`, `listBackgroundTasks`, `killBackgroundTask`, `killAllBackgroundTasks`, `subscribeBackgroundTaskEvents`, `subscribeBackgroundTaskData`) lifts the long-running command lifecycle out of the bash tool. Lifecycle events: `started`, `completed`, `failed`, `killed`, `stalled`.
+- Auto-background-on-timeout: when no custom `BashOperations` override is in play and the command is auto-backgroundable, hitting the foreground timeout transitions the running process into the registry instead of killing it. The tool returns `Command exceeded the N-second foreground timeout and was moved to the background...`.
+- Stall watchdog: backgrounded tasks whose output file stops growing for 45s are tail-checked against an interactive-prompt regex (`(y/n)`, `Press Enter`, etc.). A match fires a one-shot `stalled` event with the tail attached.
+- `AgentSession` subscribes to the registry on construct and forwards lifecycle events as `<task-notification>` follow-up messages via `agent.followUp()`. The model is notified when long-running commands complete, fail, are killed, or appear stuck on input. `dispose()` unsubscribes and kills outstanding tasks.
+- Bash tool rejects bare leading `sleep N` (N >= 2) unless `run_in_background: true`. Sub-2s sleeps and fractional sleeps remain allowed for pacing. `detectBlockedSleepPattern` is exported.
+
+### Changed
+
+- Bash tool description text now documents the timeout default/max, `run_in_background`, and the sleep blocker so the model uses these features without prompting.
+
 ## [0.72.3] - 2026-04-30
 
 ### Fixed

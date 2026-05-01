@@ -22,6 +22,7 @@ import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
+import { type BackgroundTaskEvent, killAllBackgroundTasks, subscribeBackgroundTaskEvents } from "./background-tasks.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import {
 	type CompactionResult,
@@ -239,6 +240,7 @@ export class AgentSession {
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
+	private _unsubscribeBackgroundTasks?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _agentEventQueue: Promise<void> = Promise.resolve();
 
@@ -318,6 +320,13 @@ export class AgentSession {
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+
+		// Forward background bash task lifecycle events to the agent's followUp
+		// queue so the model is notified when long-running commands complete or
+		// stall on interactive input.
+		this._unsubscribeBackgroundTasks = subscribeBackgroundTaskEvents((event) =>
+			this._handleBackgroundTaskEvent(event),
+		);
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -731,7 +740,54 @@ export class AgentSession {
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
+		if (this._unsubscribeBackgroundTasks) {
+			this._unsubscribeBackgroundTasks();
+			this._unsubscribeBackgroundTasks = undefined;
+		}
+		killAllBackgroundTasks();
 		this._eventListeners = [];
+	}
+
+	/**
+	 * Forward background-task lifecycle events into the agent as a follow-up
+	 * message so the model is notified when long-running commands change state.
+	 *
+	 * The format mirrors claude-code's `<task-notification>` block — the model
+	 * sees a structured tag with id, output path, status, and a summary line.
+	 * Idle agents queue the message; the next turn drains it.
+	 */
+	private _handleBackgroundTaskEvent(event: BackgroundTaskEvent): void {
+		const { task } = event;
+		let summary: string;
+		let body = "";
+		switch (event.type) {
+			case "started":
+				return; // Inline tool result already informs the model.
+			case "completed":
+				summary = `Background command "${task.description}" completed (exit code ${task.exitCode ?? 0})`;
+				break;
+			case "failed":
+				summary =
+					task.exitCode !== undefined
+						? `Background command "${task.description}" failed with exit code ${task.exitCode}`
+						: `Background command "${task.description}" failed`;
+				break;
+			case "killed":
+				summary = `Background command "${task.description}" was stopped`;
+				break;
+			case "stalled":
+				summary = `Background command "${task.description}" appears to be waiting for interactive input`;
+				body = `\nLast output:\n${event.tail.trimEnd()}\n\nThe command is likely blocked on an interactive prompt. Kill this task and re-run with piped input (e.g., \`echo y | command\`) or a non-interactive flag if one exists.`;
+				break;
+		}
+		const status = event.type === "stalled" ? "" : `\n<status>${event.type}</status>`;
+		const escapeXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+		const message = `<task-notification>\n<task-id>${task.taskId}</task-id>\n<output-file>${task.outputPath}</output-file>${status}\n<summary>${escapeXml(summary)}</summary>\n</task-notification>${body}`;
+		this.agent.followUp({
+			role: "user",
+			content: [{ type: "text", text: message }],
+			timestamp: Date.now(),
+		});
 	}
 
 	// =========================================================================
