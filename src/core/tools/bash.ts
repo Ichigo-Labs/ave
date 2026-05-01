@@ -30,9 +30,39 @@ function getTempFilePath(): string {
 	return join(tmpdir(), `pi-bash-${id}.log`);
 }
 
+const DEFAULT_BASH_TIMEOUT_MS = 120_000; // 2 minutes
+const MAX_BASH_TIMEOUT_MS = 600_000; // 10 minutes
+
+function getDefaultBashTimeoutMs(): number {
+	const raw = process.env.BASH_DEFAULT_TIMEOUT_MS;
+	if (raw) {
+		const parsed = Number.parseInt(raw, 10);
+		if (Number.isFinite(parsed) && parsed > 0) return parsed;
+	}
+	return DEFAULT_BASH_TIMEOUT_MS;
+}
+
+function getMaxBashTimeoutMs(): number {
+	const raw = process.env.BASH_MAX_TIMEOUT_MS;
+	if (raw) {
+		const parsed = Number.parseInt(raw, 10);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return Math.max(parsed, getDefaultBashTimeoutMs());
+		}
+	}
+	return Math.max(MAX_BASH_TIMEOUT_MS, getDefaultBashTimeoutMs());
+}
+
+function resolveTimeoutSeconds(userSeconds: number | undefined): number {
+	const defaultSec = Math.ceil(getDefaultBashTimeoutMs() / 1000);
+	const maxSec = Math.ceil(getMaxBashTimeoutMs() / 1000);
+	if (userSeconds === undefined || userSeconds <= 0) return defaultSec;
+	return Math.min(userSeconds, maxSec);
+}
+
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds. Defaults to 120s, capped at 600s." })),
 });
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -280,7 +310,7 @@ export function createBashToolDefinition(
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Default timeout is 120 seconds (max 600); pass timeout in seconds to override.`,
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
 		parameters: bashSchema,
 		async execute(
@@ -344,10 +374,11 @@ export function createBashToolDefinition(
 					}
 				};
 
+				const effectiveTimeout = resolveTimeoutSeconds(timeout);
 				ops.exec(spawnContext.command, spawnContext.cwd, {
 					onData: handleData,
 					signal,
-					timeout,
+					timeout: effectiveTimeout,
 					env: spawnContext.env,
 				})
 					.then(({ exitCode }) => {

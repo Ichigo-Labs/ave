@@ -1,6 +1,6 @@
 {
 	"name": "@ichigo.moe/ave",
-	"version": "0.72.2",
+	"version": "0.80.0",
 	"description": "ave: a fork of pi-coding-agent (coding agent CLI with read/bash/edit/write tools and session management)",
 	"type": "module",
 	"piConfig": {

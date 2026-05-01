@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [0.80.0] - 2026-04-30
+
+### Changed
+
+- The `bash` tool now applies a default 2-minute timeout when no timeout is specified, capped at 10 minutes. Previously commands with no timeout could hang forever. Both bounds are configurable via `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` env vars. Mirrors Claude Code's bash timeout strategy.
+
 ## [0.72.2] - 2026-04-30
 
 ### Changed
