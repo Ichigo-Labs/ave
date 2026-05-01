@@ -47,6 +47,8 @@ function getDictionary(): string[] {
 		// copy-assets puts the file next to the compiled module.
 		const candidates = [
 			path.join(HERE, ".hash_anchors"),
+			// Bundled entry at dist/bin/ave.js: file lives at dist/core/tools/.hash_anchors.
+			path.join(HERE, "..", "core", "tools", ".hash_anchors"),
 			path.join(HERE, "..", "..", "..", "src", "core", "tools", ".hash_anchors"),
 		];
 		for (const candidate of candidates) {
