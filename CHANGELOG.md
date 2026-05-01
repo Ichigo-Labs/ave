@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [0.72.3] - 2026-04-30
+
+### Fixed
+
+- Hash-anchor dictionary lookup failed with "Hash-anchor dictionary (.hash_anchors) not found next to the tools module" when running the bundled CLI introduced in 0.72.2. The bundle inlines `anchor-state-manager.ts` into `dist/bin/ave.js`, so `import.meta.url` resolved to `dist/bin/` and neither existing candidate path reached `dist/core/tools/.hash_anchors`. Added a candidate that walks from `dist/bin/` to `dist/core/tools/` so the bundled entry finds the dictionary; unbundled and source-tree entries continue to work via the other candidates.
+
 ## [0.72.2] - 2026-04-30
 
 ### Changed
