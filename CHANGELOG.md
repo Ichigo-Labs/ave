@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [0.82.0] - 2026-05-02
+
+### Changed
+
+- `edit` tool now auto-recovers when an anchor name is wrong or stale. If the named anchor doesn't exist, or exists but its current line content doesn't match what was provided, the tool searches the file for an exact line-content match. When the provided code line appears on exactly one line, that line is used silently — no error, no re-read needed. The "not found" / "did you mean" diagnostics are now reserved for genuinely ambiguous cases (content missing or appearing on multiple lines).
+
 ## [0.81.0] - 2026-05-02
 
 ### Added

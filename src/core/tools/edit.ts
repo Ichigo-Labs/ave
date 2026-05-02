@@ -178,6 +178,20 @@ interface FailedEntry {
 
 const ANCHOR_NAME_RE = /^[A-Z][a-zA-Z]*$/;
 
+function findUniqueLineByContent(content: string, lines: string[]): number {
+	// Returns the unique line index whose content matches exactly, or -1 if
+	// there is no match or more than one match.
+	if (!content) return -1;
+	let found = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i] === content) {
+			if (found !== -1) return -1; // ambiguous
+			found = i;
+		}
+	}
+	return found;
+}
+
 function resolveAnchor(
 	type: "anchor" | "end_anchor",
 	rawAnchor: string | undefined,
@@ -196,14 +210,6 @@ function resolveAnchor(
 		};
 	}
 
-	const index = anchors.indexOf(anchorName);
-	if (index === -1) {
-		return {
-			index: -1,
-			error: `${type} "${anchorName}" not found in the file. Re-read the file to obtain fresh anchors.`,
-		};
-	}
-
 	if (providedContent.includes("\n") || providedContent.includes("\r")) {
 		return {
 			index: -1,
@@ -211,19 +217,38 @@ function resolveAnchor(
 		};
 	}
 
-	const actualContent = lines[index];
-	if (providedContent !== actualContent) {
-		const suggestion = suggestAnchorForContent(providedContent, lines, anchors, index);
-		const hint = suggestion
-			? ` Did you mean "${suggestion.anchor}${getDelimiter()}${suggestion.content}" (line ${suggestion.lineNumber})?`
-			: "";
+	const index = anchors.indexOf(anchorName);
+
+	// Happy path: anchor name resolves and content matches.
+	if (index !== -1 && lines[index] === providedContent) {
+		return { index };
+	}
+
+	// Recovery: the model's anchor name is wrong or stale, but the provided
+	// code line may still be unique in the file. If it is, silently fall back
+	// to that line so we "do what the model probably means".
+	const uniqueByContent = findUniqueLineByContent(providedContent, lines);
+	if (uniqueByContent !== -1) {
+		return { index: uniqueByContent };
+	}
+
+	// Couldn't recover: surface a precise error so the model can re-read.
+	if (index === -1) {
 		return {
 			index: -1,
-			error: `${type} "${anchorName}" exists, but the code line you provided does not match the file. Expected: "${actualContent}", Provided: "${providedContent}".${hint}`,
+			error: `${type} "${anchorName}" not found in the file. Re-read the file to obtain fresh anchors.`,
 		};
 	}
 
-	return { index };
+	const actualContent = lines[index];
+	const suggestion = suggestAnchorForContent(providedContent, lines, anchors, index);
+	const hint = suggestion
+		? ` Did you mean "${suggestion.anchor}${getDelimiter()}${suggestion.content}" (line ${suggestion.lineNumber})?`
+		: "";
+	return {
+		index: -1,
+		error: `${type} "${anchorName}" exists, but the code line you provided does not match the file. Expected: "${actualContent}", Provided: "${providedContent}".${hint}`,
+	};
 }
 
 function suggestAnchorForContent(
