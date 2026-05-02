@@ -20,7 +20,7 @@
  * not pull the mistral SDK into the main bundle.
  */
 
-import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -105,6 +105,11 @@ async function main(): Promise<void> {
 	const withShebang = contents.startsWith("#!") ? contents : `#!/usr/bin/env node\n${contents}`;
 	writeFileSync(renamedPath, withShebang);
 	chmodSync(renamedPath, 0o755);
+
+	// Copy runtime assets that the bundled code resolves relative to the
+	// bundle's own location. anchor-state-manager.ts looks for .hash_anchors
+	// next to its module; in the bundled layout that means dist/bin/.
+	copyFileSync(join(ROOT, "src/core/tools/.hash_anchors"), join(OUTDIR, ".hash_anchors"));
 
 	// Print a small summary sorted by size for signal.
 	const metafile = result.metafile;

@@ -43,10 +43,15 @@ function computeHashes(lines: string[]): Uint32Array {
 
 function getDictionary(): string[] {
 	if (dictionary.length === 0) {
-		// In dev/test we resolve from the source tree; in published builds
-		// copy-assets puts the file next to the compiled module.
+		// Resolution paths, in order:
+		//   1. Next to the compiled module (dist/core/tools/.hash_anchors), used
+		//      by the unbundled dist build and by tsx-driven dev runs.
+		//   2. Bundled layout: ave.js lives in dist/bin/, so the asset sits at
+		//      ../core/tools/.hash_anchors relative to the bundle.
+		//   3. Source tree fallback for tests that import the .ts directly.
 		const candidates = [
 			path.join(HERE, ".hash_anchors"),
+			path.join(HERE, "..", "core", "tools", ".hash_anchors"),
 			path.join(HERE, "..", "..", "..", "src", "core", "tools", ".hash_anchors"),
 		];
 		for (const candidate of candidates) {

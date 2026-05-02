@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [0.80.1] - 2026-05-02
+
+### Fixed
+
+- `read` and `edit` tools no longer fail with `Hash-anchor dictionary (.hash_anchors) not found next to the tools module`. The bundled CLI entry lives in `dist/bin/`, but neither candidate path resolved the dictionary from there (the `src/` fallback isn't shipped, and `dist/bin/.hash_anchors` was never copied). Added the `dist/bin/ → dist/core/tools/.hash_anchors` candidate in `anchor-state-manager.ts`, and `bundle-cli.ts` now also copies the dictionary into `dist/bin/` after esbuild wipes the directory. Regression of the 0.72.3 fix that was lost during the package consolidation.
+
 ## [0.80.0] - 2026-04-30
 
 ### Changed
