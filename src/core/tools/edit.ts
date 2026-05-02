@@ -213,13 +213,38 @@ function resolveAnchor(
 
 	const actualContent = lines[index];
 	if (providedContent !== actualContent) {
+		const suggestion = suggestAnchorForContent(providedContent, lines, anchors, index);
+		const hint = suggestion
+			? ` Did you mean "${suggestion.anchor}${getDelimiter()}${suggestion.content}" (line ${suggestion.lineNumber})?`
+			: "";
 		return {
 			index: -1,
-			error: `${type} "${anchorName}" exists, but the code line you provided does not match the file. Expected: "${actualContent}", Provided: "${providedContent}".`,
+			error: `${type} "${anchorName}" exists, but the code line you provided does not match the file. Expected: "${actualContent}", Provided: "${providedContent}".${hint}`,
 		};
 	}
 
 	return { index };
+}
+
+function suggestAnchorForContent(
+	providedContent: string,
+	lines: string[],
+	anchors: string[],
+	nearIdx: number,
+): { anchor: string; content: string; lineNumber: number } | undefined {
+	if (!providedContent) return undefined;
+	let bestIdx = -1;
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i] !== providedContent) continue;
+		const distance = Math.abs(i - nearIdx);
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestIdx = i;
+		}
+	}
+	if (bestIdx === -1) return undefined;
+	return { anchor: anchors[bestIdx], content: lines[bestIdx], lineNumber: bestIdx + 1 };
 }
 
 function resolveEdits(

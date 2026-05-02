@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [0.80.2] - 2026-05-02
+
+### Fixed
+
+- `edit` tool now suggests the correct anchor when the provided line content matches a different line. When the model assembles `Anchor§<line>` with the wrong anchor (e.g. attaches an empty line's anchor to the next line's content), the failure message now appends `Did you mean "<correct-anchor>§<line>" (line N)?` to help self-correct.
+
 ## [0.80.1] - 2026-05-02
 
 ### Fixed
