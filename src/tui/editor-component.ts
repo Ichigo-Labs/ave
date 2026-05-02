@@ -39,6 +39,12 @@ export interface EditorComponent extends Component {
 	/** Add text to history for up/down navigation */
 	addToHistory?(text: string): void;
 
+	/** Seed history with persisted entries (oldest-first). Should not fire onHistoryAdd. */
+	seedHistory?(entries: string[]): void;
+
+	/** Called after a new history entry is added (post dedupe). Used for persistence. */
+	onHistoryAdd?: (text: string) => void;
+
 	// =========================================================================
 	// Advanced text manipulation (optional)
 	// =========================================================================

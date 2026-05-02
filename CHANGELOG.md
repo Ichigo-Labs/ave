@@ -3,6 +3,17 @@
 
 ## [Unreleased]
 
+## [0.81.0] - 2026-05-02
+
+### Added
+
+- Persistent input history per working directory. The interactive editor now seeds its up/down history from `<session-dir>/input-history.jsonl` on startup and appends each submitted prompt, so a fresh session in the same cwd can recall the previous session's inputs.
+
+### Changed
+
+- Up/down arrow at the first/last visual line of the editor now always navigates input history instead of jumping to line start/end. Previously this only happened when the editor was empty or already in history-browse mode.
+- Tool error messages from `read` and `edit` (including the shared `[invalid arg]` header) render with the `warning` color instead of the loud `error` color, since the `toolErrorBg` background already conveys the failure.
+
 ## [0.80.2] - 2026-05-02
 
 ### Fixed

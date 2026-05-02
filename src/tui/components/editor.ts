@@ -283,6 +283,8 @@ export class Editor implements Component, Focusable {
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
+	/** Called after a new entry is added to history (post dedupe). Used for persistence. */
+	public onHistoryAdd?: (text: string) => void;
 	public disableSubmit: boolean = false;
 
 	constructor(tui: TUI, theme: EditorTheme, options: EditorOptions = {}) {
@@ -348,10 +350,21 @@ export class Editor implements Component, Focusable {
 		if (this.history.length > 100) {
 			this.history.pop();
 		}
+		this.onHistoryAdd?.(trimmed);
 	}
 
-	private isEditorEmpty(): boolean {
-		return this.state.lines.length === 1 && this.state.lines[0] === "";
+	/**
+	 * Seed history without firing onHistoryAdd (used to load persisted history).
+	 * Entries should be ordered oldest-first; the most recent entry will end up at index 0.
+	 */
+	seedHistory(entries: string[]): void {
+		for (const e of entries) {
+			const trimmed = e.trim();
+			if (!trimmed) continue;
+			if (this.history.length > 0 && this.history[0] === trimmed) continue;
+			this.history.unshift(trimmed);
+			if (this.history.length > 100) this.history.pop();
+		}
 	}
 
 	private isOnFirstVisualLine(): boolean {
@@ -750,24 +763,16 @@ export class Editor implements Component, Focusable {
 
 		// Arrow key navigation (with history support)
 		if (kb.matches(data, "tui.editor.cursorUp")) {
-			if (this.isEditorEmpty()) {
+			if (this.isOnFirstVisualLine()) {
 				this.navigateHistory(-1);
-			} else if (this.historyIndex > -1 && this.isOnFirstVisualLine()) {
-				this.navigateHistory(-1);
-			} else if (this.isOnFirstVisualLine()) {
-				// Already at top - jump to start of line
-				this.moveToLineStart();
 			} else {
 				this.moveCursor(-1, 0);
 			}
 			return;
 		}
 		if (kb.matches(data, "tui.editor.cursorDown")) {
-			if (this.historyIndex > -1 && this.isOnLastVisualLine()) {
+			if (this.isOnLastVisualLine()) {
 				this.navigateHistory(1);
-			} else if (this.isOnLastVisualLine()) {
-				// Already at bottom - jump to end of line
-				this.moveToLineEnd();
 			} else {
 				this.moveCursor(1, 0);
 			}

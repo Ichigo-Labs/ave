@@ -60,5 +60,5 @@ export type ToolRenderResultLike<TDetails> = {
 };
 
 export function invalidArgText(theme: { fg: (name: any, text: string) => string }): string {
-	return theme.fg("error", "[invalid arg]");
+	return theme.fg("warning", "[invalid arg]");
 }

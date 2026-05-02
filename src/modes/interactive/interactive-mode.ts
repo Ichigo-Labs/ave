@@ -436,6 +436,8 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
+		this.loadInputHistory();
+		this.editor.onHistoryAdd = (text) => this.persistInputHistory(text);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
@@ -446,6 +448,45 @@ export class InteractiveMode {
 		// Register themes from resource loader and initialize
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 		initTheme(this.settingsManager.getTheme(), true);
+	}
+
+	private getInputHistoryPath(): string | undefined {
+		const dir = this.sessionManager.getSessionDir();
+		if (!dir) return undefined;
+		return path.join(dir, "input-history.jsonl");
+	}
+
+	private loadInputHistory(): void {
+		try {
+			const filePath = this.getInputHistoryPath();
+			if (!filePath || !fs.existsSync(filePath)) return;
+			const content = fs.readFileSync(filePath, "utf8");
+			const lines = content.split("\n").filter((l) => l.trim());
+			const entries: string[] = [];
+			for (const line of lines.slice(-100)) {
+				try {
+					const v = JSON.parse(line);
+					if (typeof v === "string") entries.push(v);
+				} catch {
+					// skip malformed line
+				}
+			}
+			this.editor.seedHistory?.(entries);
+		} catch {
+			// best-effort persistence
+		}
+	}
+
+	private persistInputHistory(text: string): void {
+		try {
+			const filePath = this.getInputHistoryPath();
+			if (!filePath) return;
+			const dir = path.dirname(filePath);
+			if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+			fs.appendFileSync(filePath, `${JSON.stringify(text)}\n`);
+		} catch {
+			// best-effort persistence
+		}
 	}
 
 	private getAutocompleteSourceTag(sourceInfo?: SourceInfo): string | undefined {

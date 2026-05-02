@@ -658,7 +658,7 @@ function buildEditCallComponent(
 
 	if ("error" in component.preview) {
 		component.addChild(new Spacer(1));
-		component.addChild(new Text(theme.fg("error", component.preview.error), 0, 0));
+		component.addChild(new Text(theme.fg("warning", component.preview.error), 0, 0));
 		return component;
 	}
 
@@ -668,7 +668,7 @@ function buildEditCallComponent(
 			component.addChild(new Text(theme.fg("accent", f.path), 0, 0));
 			component.addChild(new Text(renderDiff(f.diff, { filePath: f.path }), 0, 0));
 		} else if (f.error) {
-			component.addChild(new Text(theme.fg("error", `${f.path}: ${f.error}`), 0, 0));
+			component.addChild(new Text(theme.fg("warning", `${f.path}: ${f.error}`), 0, 0));
 		}
 		component.addChild(new Spacer(1));
 	}
@@ -910,7 +910,7 @@ EXAMPLE (multi-file batch):
 					.join("\n");
 				if (errorText) {
 					container.addChild(new Spacer(1));
-					container.addChild(new Text(theme.fg("error", errorText), 1, 0));
+					container.addChild(new Text(theme.fg("warning", errorText), 1, 0));
 				}
 			}
 			return container;
