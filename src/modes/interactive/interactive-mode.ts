@@ -451,7 +451,7 @@ export class InteractiveMode {
 	}
 
 	private getInputHistoryPath(): string | undefined {
-		const dir = this.sessionManager.getSessionDir();
+		const dir = getAgentDir();
 		if (!dir) return undefined;
 		return path.join(dir, "input-history.jsonl");
 	}

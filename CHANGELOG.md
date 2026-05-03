@@ -3,6 +3,13 @@
 
 ## [Unreleased]
 
+## [0.83.0] - 2026-05-03
+
+### Changed
+
+- Persistent input history is now stored globally at `<agent-dir>/input-history.jsonl` instead of per-cwd. Up/down arrow recall now works across working directories, so a prompt entered in `/foo` can be recalled from a fresh session in `/bar`.
+
+
 ## [0.82.0] - 2026-05-02
 
 ### Changed
